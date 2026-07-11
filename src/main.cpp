@@ -3,6 +3,12 @@
 #include <vector>
 #include <csignal>
 #include <atomic>
+#include <regex>
+#include <fstream>
+#include <sstream>
+#include <cstdlib>
+#include <array>
+#include <memory>
 
 #include "config_manager.hpp"
 #include "token_tracker.hpp"
@@ -19,6 +25,203 @@ std::atomic<bool> g_interrupted(false);
 void signalHandler(int signum) {
     g_interrupted = true;
     std::cout << "\n\n⚠  Interrupted by user. Type 'exit' to quit.\n";
+}
+
+// 执行终端命令并返回输出
+std::string executeCommand(const std::string& cmd) {
+    std::array<char, 128> buffer;
+    std::string result;
+    // 使用 popen 执行命令，重定向 stderr 到 stdout
+    std::string full_cmd = cmd + " 2>&1";
+    std::unique_ptr<FILE, decltype(&pclose)> pipe(popen(full_cmd.c_str(), "r"), pclose);
+    if (!pipe) {
+        return "Error: Failed to execute command";
+    }
+    while (fgets(buffer.data(), buffer.size(), pipe.get()) != nullptr) {
+        result += buffer.data();
+    }
+    return result;
+}
+
+// 写入文件
+bool writeFile(const std::string& path, const std::string& content) {
+    try {
+        std::ofstream file(path, std::ios::out | std::ios::trunc);
+        if (!file.is_open()) {
+            return false;
+        }
+        file << content;
+        file.close();
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
+// 读取文件内容
+std::string readFile(const std::string& path) {
+    std::ifstream file(path);
+    if (!file.is_open()) {
+        return "";
+    }
+    std::stringstream buffer;
+    buffer << file.rdbuf();
+    return buffer.str();
+}
+
+// 解析并执行工具调用
+void executeToolCalls(const std::string& response, const std::string& work_dir) {
+    // 匹配 DeepSeek/Claude 风格的工具调用：<｜tool_calls>...<｜/tool_calls>
+    // 使用简单字符串查找避免 regex 特殊字符问题
+    std::string start_tag = "<｜tool_calls>";
+    std::string end_tag = "<｜/tool_calls>";
+    
+    size_t start_pos = response.find(start_tag);
+    if (start_pos == std::string::npos) {
+        return;  // 没有工具调用
+    }
+    
+    size_t end_pos = response.find(end_tag, start_pos);
+    if (end_pos == std::string::npos) {
+        return;  // 格式不完整
+    }
+    
+    std::string tools_content = response.substr(start_pos + start_tag.length(), 
+                                                 end_pos - start_pos - start_tag.length());
+    
+    // 提取每个工具调用 <｜tool_call name="...">...</｜tool_call>
+    std::string tool_start = "<｜tool_call name=\"";
+    std::string tool_end = "<｜/tool_call>";
+    
+    size_t pos = 0;
+    while ((pos = tools_content.find(tool_start, pos)) != std::string::npos) {
+        size_t name_start = pos + tool_start.length();
+        size_t name_end = tools_content.find("\"", name_start);
+        if (name_end == std::string::npos) break;
+        
+        std::string tool_name = tools_content.substr(name_start, name_end - name_start);
+        
+        size_t content_start = tools_content.find(">", name_end) + 1;
+        size_t content_end = tools_content.find(tool_end, content_start);
+        if (content_end == std::string::npos) break;
+        
+        std::string params_xml = tools_content.substr(content_start, content_end - content_start);
+        
+        std::cout << "\n🔧 Executing tool: " << tool_name << std::endl;
+        
+        // 提取参数 <param>value</param>
+        auto extractParam = [](const std::string& xml, const std::string& param_name) -> std::string {
+            std::string open_tag = "<" + param_name + ">";
+            std::string close_tag = "</" + param_name + ">";
+            
+            size_t start = xml.find(open_tag);
+            if (start == std::string::npos) return "";
+            
+            start += open_tag.length();
+            size_t end = xml.find(close_tag, start);
+            if (end == std::string::npos) return "";
+            
+            return xml.substr(start, end - start);
+        };
+        
+        if (tool_name == "write_file") {
+            std::string path = extractParam(params_xml, "path");
+            std::string content = extractParam(params_xml, "content");
+            
+            // 如果是相对路径，拼接工作目录
+            if (!path.empty() && path[0] != '/') {
+                path = work_dir + "/" + path;
+            }
+            
+            std::cout << "   📝 Writing to: " << path << std::endl;
+            if (writeFile(path, content)) {
+                std::cout << "   ✅ File written successfully\n";
+            } else {
+                std::cout << "   ❌ Failed to write file\n";
+            }
+            
+        } else if (tool_name == "read_file") {
+            std::string path = extractParam(params_xml, "path");
+            if (!path.empty() && path[0] != '/') {
+                path = work_dir + "/" + path;
+            }
+            
+            std::cout << "   📖 Reading: " << path << std::endl;
+            std::string content = readFile(path);
+            if (!content.empty()) {
+                std::cout << "   ───────────────────────────────\n";
+                std::cout << content;
+                if (content.back() != '\n') std::cout << "\n";
+                std::cout << "   ───────────────────────────────\n";
+            } else {
+                std::cout << "   ❌ Failed to read file or file not found\n";
+            }
+            
+        } else if (tool_name == "edit_file") {
+            std::string path = extractParam(params_xml, "path");
+            std::string old_text = extractParam(params_xml, "old_text");
+            std::string new_text = extractParam(params_xml, "new_text");
+            
+            if (!path.empty() && path[0] != '/') {
+                path = work_dir + "/" + path;
+            }
+            
+            std::cout << "   ✏️  Editing: " << path << std::endl;
+            std::string content = readFile(path);
+            if (!content.empty() && !old_text.empty()) {
+                size_t pos_found = content.find(old_text);
+                if (pos_found != std::string::npos) {
+                    content.replace(pos_found, old_text.length(), new_text);
+                    if (writeFile(path, content)) {
+                        std::cout << "   ✅ File edited successfully\n";
+                    } else {
+                        std::cout << "   ❌ Failed to save edited file\n";
+                    }
+                } else {
+                    std::cout << "   ❌ Old text not found in file\n";
+                }
+            } else {
+                std::cout << "   ❌ Failed to read file or empty old_text\n";
+            }
+            
+        } else if (tool_name == "run_terminal" || tool_name == "terminal" || tool_name == "execute_command") {
+            std::string command = extractParam(params_xml, "command");
+            
+            if (!command.empty()) {
+                std::cout << "   💻 Executing: " << command << std::endl;
+                std::string output = executeCommand(command);
+                if (!output.empty()) {
+                    std::cout << "   ───────────────────────────────\n";
+                    std::cout << output;
+                    if (output.back() != '\n') std::cout << "\n";
+                    std::cout << "   ───────────────────────────────\n";
+                } else {
+                    std::cout << "   (No output)\n";
+                }
+            }
+            
+        } else if (tool_name == "list_directory") {
+            std::string path = extractParam(params_xml, "path");
+            if (path.empty()) path = work_dir;
+            if (path[0] != '/') {
+                path = work_dir + "/" + path;
+            }
+            
+            std::cout << "   📁 Listing: " << path << std::endl;
+            std::string cmd = "ls -la \"" + path + "\"";
+            std::string output = executeCommand(cmd);
+            if (!output.empty()) {
+                std::cout << "   ───────────────────────────────\n";
+                std::cout << output;
+                if (output.back() != '\n') std::cout << "\n";
+                std::cout << "   ───────────────────────────────\n";
+            }
+        } else {
+            std::cout << "   ⚠️  Unknown tool: " << tool_name << "\n";
+        }
+        
+        pos = content_end + tool_end.length();
+    }
 }
 
 int main() {
@@ -177,6 +380,9 @@ int main() {
         
         // 显示 AI 响应
         ui.showAIResponse(response.content);
+        
+        // 解析并执行工具调用 (在添加到历史之前)
+        executeToolCalls(response.content, work_dir);
         
         // 记录 token 使用
         token_tracker.recordTokens(response.input_tokens, response.output_tokens);

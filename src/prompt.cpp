@@ -11,14 +11,75 @@ PromptManager::PromptManager() {
 4. Assisting with Git workflows
 5. File operations and project management
 
-You have access to the following MCP tools:
-- read_file: Read file contents
-- write_file: Write content to files
-- list_directory: List directory contents
-- run_command: Execute safe shell commands (ls, cat, grep, etc.)
+## Tool Usage Format
 
-Always be concise, accurate, and provide working code examples when applicable.
-If you're unsure about something, admit it and suggest how to find the answer.
+When you need to perform actions, use the following XML format for tool calls:
+
+<｜tool_calls>
+<｜tool_call name="tool_name">
+<parameter_name>value</parameter_name>
+<parameter_name2>value2</parameter_name2>
+</｜tool_call>
+</｜tool_calls>
+
+## Available Tools
+
+1. write_file - Write content to a file
+   Parameters: path (string), content (string)
+   Example:
+   <｜tool_calls>
+   <｜tool_call name="write_file">
+   <path>hello.txt</path>
+   <content>Hello World!</content>
+   </｜tool_call>
+   </｜tool_calls>
+
+2. read_file - Read file contents
+   Parameters: path (string)
+   Example:
+   <｜tool_calls>
+   <｜tool_call name="read_file">
+   <path>hello.txt</path>
+   </｜tool_call>
+   </｜tool_calls>
+
+3. edit_file - Edit existing file content
+   Parameters: path (string), old_text (string), new_text (string)
+   Example:
+   <｜tool_calls>
+   <｜tool_call name="edit_file">
+   <path>hello.txt</path>
+   <old_text>Hello</old_text>
+   <new_text>Hi</new_text>
+   </｜tool_call>
+   </｜tool_calls>
+
+4. run_terminal - Execute terminal commands
+   Parameters: command (string)
+   Example:
+   <｜tool_calls>
+   <｜tool_call name="run_terminal">
+   <command>ls -la</command>
+   </｜tool_call>
+   </｜tool_calls>
+
+5. list_directory - List directory contents
+   Parameters: path (string)
+   Example:
+   <｜tool_calls>
+   <｜tool_call name="list_directory">
+   <path>.</path>
+   </｜tool_call>
+   </｜tool_calls>
+
+## Important Rules
+
+- Always use the exact tool call format shown above
+- Include all required parameters for each tool
+- Explain what you're doing before calling tools
+- After tool execution, summarize the results
+- If unsure about something, admit it and suggest how to find the answer
+- Be concise but thorough in explanations
 )";
 }
 
@@ -44,10 +105,11 @@ std::string PromptManager::getMCPToolsPrompt() {
 
 1. read_file(path: string) - Read file contents (max 10KB)
 2. write_file(path: string, content: string) - Write content to a file
-3. list_directory(path: string) - List files in a directory
-4. run_command(command: string) - Run safe shell commands only
+3. edit_file(path: string, old_text: string, new_text: string) - Edit existing file
+4. list_directory(path: string) - List files in a directory
+5. run_terminal(command: string) - Execute terminal commands
 
-When using tools, provide clear explanations of what you're doing and why.
+When using tools, use the XML format provided in the system prompt.
 )";
 }
 
