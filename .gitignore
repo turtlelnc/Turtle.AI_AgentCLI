@@ -1,0 +1,34 @@
+```
+# CMake build artifacts
+build/
+CMakeCache.txt
+CMakeFiles/
+Makefile
+cmake_install.cmake
+compile_commands.json
+
+# Executables
+opencode
+
+# Object files
+*.o
+*.obj
+*.d
+
+# Temporary files
+*.tmp
+*.log
+
+# Environment
+.env
+.env.local
+*.env.*
+
+# Editors
+.vscode/
+.idea/
+
+# OS generated files
+.DS_Store
+Thumbs.db
+```
