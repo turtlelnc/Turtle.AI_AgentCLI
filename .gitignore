@@ -1,23 +1,27 @@
 ```
-# CMake build artifacts
-build/
-CMakeCache.txt
-CMakeFiles/
-Makefile
-cmake_install.cmake
-compile_commands.json
-
-# Executables
-opencode
-
-# Object files
+# Compiled and build artifacts
 *.o
 *.obj
-*.d
+*.exe
+*.dll
+*.so
+*.a
+*.out
 
-# Temporary files
-*.tmp
+# Dependencies
+venv/
+.venv/
+__pycache__/
+*.egg-info/
+build/
+dist/
+target/
+
+# Logs and temp files
 *.log
+*.tmp
+*.swp
+*.swo
 
 # Environment
 .env
@@ -28,7 +32,12 @@ opencode
 .vscode/
 .idea/
 
-# OS generated files
+# Coverage
+coverage/
+htmlcov/
+.coverage
+
+# OS
 .DS_Store
 Thumbs.db
 ```

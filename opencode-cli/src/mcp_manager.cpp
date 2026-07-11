@@ -3,6 +3,11 @@
 #include <sstream>
 #include <dirent.h>
 #include <sys/stat.h>
+#include <array>
+#include <memory>
+#include <chrono>
+#include <thread>
+#include <csignal>
 
 namespace opencode {
 
@@ -59,6 +64,22 @@ void McpManager::register_builtin_tools() {
     search_files.schema = R"({"type":"object","properties":{"pattern":{"type":"string"},"path":{"type":"string"}},"required":["pattern"]})";
     search_files.handler = [this](const nlohmann::json& p) { return handle_search_files(p); };
     register_tool(search_files);
+    
+    // Write file tool
+    McpTool write_file;
+    write_file.name = "write_file";
+    write_file.description = "Write content to a file (creates or overwrites)";
+    write_file.schema = R"({"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"}},"required":["path","content"]})";
+    write_file.handler = [this](const nlohmann::json& p) { return handle_write_file(p); };
+    register_tool(write_file);
+    
+    // Run command tool
+    McpTool run_command;
+    run_command.name = "run_command";
+    run_command.description = "Execute a shell command safely";
+    run_command.schema = R"({"type":"object","properties":{"command":{"type":"string"},"timeout_ms":{"type":"integer"}},"required":["command"]})";
+    run_command.handler = [this](const nlohmann::json& p) { return handle_run_command(p); };
+    register_tool(run_command);
 }
 
 std::string McpManager::handle_read_file(const nlohmann::json& params) {
@@ -130,6 +151,77 @@ std::string McpManager::handle_search_files(const nlohmann::json& params) {
     }
     
     while (fgets(buffer.data(), buffer.size(), pipe.get()) != nullptr) {
+        result += buffer.data();
+    }
+    
+    return result;
+}
+
+std::string McpManager::handle_write_file(const nlohmann::json& params) {
+    if (!params.contains("path")) {
+        return "Error: 'path' parameter required";
+    }
+    if (!params.contains("content")) {
+        return "Error: 'content' parameter required";
+    }
+    
+    std::string path = params["path"].get<std::string>();
+    std::string content = params["content"].get<std::string>();
+    
+    std::ofstream file(path);
+    if (!file.is_open()) {
+        return "Error: Cannot open file for writing: " + path;
+    }
+    
+    file << content;
+    file.close();
+    
+    if (file.fail()) {
+        return "Error: Failed to write to file: " + path;
+    }
+    
+    return "Successfully wrote " + std::to_string(content.size()) + " bytes to " + path;
+}
+
+std::string McpManager::handle_run_command(const nlohmann::json& params) {
+    if (!params.contains("command")) {
+        return "Error: 'command' parameter required";
+    }
+    
+    std::string command = params["command"].get<std::string>();
+    int timeout_ms = 30000; // Default 30s timeout
+    if (params.contains("timeout_ms")) {
+        timeout_ms = params["timeout_ms"].get<int>();
+    }
+    
+    // Safety check: block dangerous commands
+    std::vector<std::string> blocked = {"rm -rf /", "mkfs", "dd if=/dev/zero", ":(){:|:&};:"};
+    for (const auto& b : blocked) {
+        if (command.find(b) != std::string::npos) {
+            return "Error: Command blocked for safety reasons";
+        }
+    }
+    
+    std::array<char, 256> buffer;
+    std::string result;
+    
+    auto start = std::chrono::steady_clock::now();
+    std::unique_ptr<FILE, decltype(&pclose)> pipe(popen(command.c_str(), "r"), pclose);
+    if (!pipe) {
+        return "Error: Failed to execute command";
+    }
+    
+    while (true) {
+        auto now = std::chrono::steady_clock::now();
+        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - start).count();
+        
+        if (elapsed >= timeout_ms) {
+            return "Error: Command timed out after " + std::to_string(timeout_ms) + "ms";
+        }
+        
+        if (fgets(buffer.data(), buffer.size(), pipe.get()) == nullptr) {
+            break;
+        }
         result += buffer.data();
     }
     

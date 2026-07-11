@@ -2,6 +2,8 @@
 #include <string>
 #include <memory>
 #include <filesystem>
+#include <csignal>
+#include <atomic>
 
 #include "config_manager.hpp"
 #include "git_manager.hpp"
@@ -12,11 +14,23 @@
 
 using namespace opencode;
 
+// Global flag for graceful shutdown
+static std::atomic<bool> g_shutdown_requested{false};
+
+void signal_handler(int /*signum*/) {
+    g_shutdown_requested = true;
+    std::cout << "\n\n⚠️  Interrupt received. Type 'quit' to exit or continue chatting.\n";
+}
+
 class OpenCodeApp {
 public:
     OpenCodeApp() : ui_(), config_mgr_(), git_mgr_(), mcp_mgr_(), http_client_() {}
     
     int run() {
+        // Setup signal handlers
+        std::signal(SIGINT, signal_handler);
+        std::signal(SIGTERM, signal_handler);
+        
         ui_.print_header();
         
         // Setup sequence
@@ -41,9 +55,15 @@ private:
         
         // Step 1: Choose API mode
         std::vector<std::string> mode_options = {
+            "LiteLLM Proxy (unified interface)",
             "OpenAI API",
-            "Anthropic API", 
-            "Llama.cpp (local)"
+            "Anthropic API",
+            "Google AI / Vertex",
+            "Groq",
+            "TogetherAI",
+            "OpenRouter",
+            "Llama.cpp (local)",
+            "Custom OpenAI-compatible endpoint"
         };
         int mode_choice = ui_.show_menu("Select AI Provider", mode_options);
         if (mode_choice < 0) mode_choice = 0;
@@ -51,7 +71,41 @@ private:
         config_mgr_.config().mode = static_cast<ApiMode>(mode_choice);
         
         // Step 2: Configure credentials or local settings
-        if (config_mgr_.config().mode == ApiMode::LlamaCpp) {
+        if (config_mgr_.config().mode == ApiMode::LiteLLM_Proxy) {
+            std::cout << "\n📦 LiteLLM Proxy Mode - Unified interface for 100+ LLM providers\n";
+            std::string host = ui_.get_text_input("LiteLLM server host (default: localhost)");
+            if (!host.empty()) {
+                config_mgr_.config().litellm_host = host;
+            }
+            
+            std::string port_str = ui_.get_text_input("LiteLLM server port (default: 4000)");
+            if (!port_str.empty()) {
+                try {
+                    config_mgr_.config().litellm_port = std::stoi(port_str);
+                } catch (...) {
+                    ui_.print_error("Invalid port, using default 4000");
+                }
+            }
+            
+            std::string base_url = ui_.get_text_input("Custom base URL (optional, press Enter to skip)");
+            if (!base_url.empty()) {
+                config_mgr_.config().litellm_base_url = base_url;
+            }
+            
+            std::string api_key = ui_.get_text_input("API key (optional for local LiteLLM)");
+            config_mgr_.config().api_key = api_key;
+            
+            // Auto-detect provider from LiteLLM
+            std::string litellm_url = config_mgr_.build_litellm_url();
+            ProviderType detected = config_mgr_.detect_provider(litellm_url);
+            if (detected != ProviderType::Unknown) {
+                std::cout << "✓ Auto-detected provider: " << config_mgr_.provider_type_to_string(detected) << "\n";
+                config_mgr_.config().api_provider = config_mgr_.provider_type_to_string(detected);
+            }
+            
+            config_mgr_.fetch_models_from_litellm();
+            
+        } else if (config_mgr_.config().mode == ApiMode::LlamaCpp) {
             std::string host = ui_.get_text_input("Llama.cpp server host (default: localhost)");
             if (!host.empty()) {
                 config_mgr_.config().llama_host = host;
@@ -65,17 +119,60 @@ private:
                     ui_.print_error("Invalid port, using default 8080");
                 }
             }
-        } else {
+            
+        } else if (config_mgr_.config().mode == ApiMode::OpenRouter || 
+                   !config_mgr_.config().custom_base_url.empty()) {
+            // Custom endpoint configuration
+            if (config_mgr_.config().mode != ApiMode::OpenRouter) {
+                std::string custom_url = ui_.get_text_input("Custom API base URL");
+                config_mgr_.config().custom_base_url = custom_url;
+            } else {
+                config_mgr_.config().custom_base_url = "https://openrouter.ai/api/v1";
+            }
             std::string api_key = ui_.get_text_input("Enter your API key");
             config_mgr_.config().api_key = api_key;
             
-            if (config_mgr_.config().mode == ApiMode::Anthropic) {
-                config_mgr_.config().api_provider = "anthropic";
-                config_mgr_.config().model = "claude-sonnet-4-20250514";
-            } else {
-                config_mgr_.config().api_provider = "openai";
-                config_mgr_.config().model = "gpt-4o";
+        } else {
+            // Standard providers (OpenAI, Anthropic, Google, Groq, TogetherAI)
+            std::string api_key = ui_.get_text_input("Enter your API key");
+            config_mgr_.config().api_key = api_key;
+            
+            // Set provider-specific defaults
+            switch (config_mgr_.config().mode) {
+                case ApiMode::Anthropic:
+                    config_mgr_.config().api_provider = "anthropic";
+                    config_mgr_.config().model = "claude-sonnet-4-20250514";
+                    break;
+                case ApiMode::Google:
+                    config_mgr_.config().api_provider = "google";
+                    config_mgr_.config().model = "gemini-2.0-flash-exp";
+                    break;
+                case ApiMode::Groq:
+                    config_mgr_.config().api_provider = "groq";
+                    config_mgr_.config().model = "llama-3.3-70b-versatile";
+                    break;
+                case ApiMode::TogetherAI:
+                    config_mgr_.config().api_provider = "together";
+                    config_mgr_.config().model = "meta-llama/Llama-3.3-70B-Instruct-Turbo";
+                    break;
+                case ApiMode::OpenRouter:
+                    config_mgr_.config().api_provider = "openrouter";
+                    config_mgr_.config().model = "meta-llama/llama-3.3-70b-instruct";
+                    break;
+                default:  // OpenAI
+                    config_mgr_.config().api_provider = "openai";
+                    config_mgr_.config().model = "gpt-4o";
             }
+        }
+        
+        // Request settings
+        std::string max_tok = ui_.get_text_input("Max tokens (default: 4096)");
+        if (!max_tok.empty()) {
+            try { config_mgr_.config().max_tokens = std::stoi(max_tok); } catch (...) {}
+        }
+        std::string temp = ui_.get_text_input("Temperature (default: 0.7)");
+        if (!temp.empty()) {
+            try { config_mgr_.config().temperature = std::stod(temp); } catch (...) {}
         }
         
         // Step 3: Select working directory
@@ -122,6 +219,12 @@ private:
         // Save configuration
         config_mgr_.save();
         
+        // Validate configuration
+        if (!config_mgr_.validate()) {
+            ui_.print_error("Invalid configuration. Please check your settings.");
+            return false;
+        }
+        
         std::cout << "\n✓ Setup complete. Starting chat session...\n";
         return true;
     }
@@ -157,6 +260,11 @@ private:
                 for (const auto& t : tools) {
                     std::cout << "  • " << t << "\n";
                 }
+                continue;
+            }
+            
+            if (input == "status" || input == "/s") {
+                show_status();
                 continue;
             }
             
@@ -226,13 +334,47 @@ private:
         std::cout << "│ /h, help        - Show this help message\n";
         std::cout << "│ /c, clear       - Clear conversation history\n";
         std::cout << "│ /t, tools       - List available MCP tools\n";
+        std::cout << "│ /s, status      - Show current configuration\n";
         std::cout << "│\n";
         std::cout << "│ Just type your message to chat with the AI.\n";
         std::cout << "└─\n\n";
     }
+    
+    void show_status() {
+        std::cout << "\n┌─ Current Configuration\n";
+        std::cout << "│ Mode: ";
+        switch (config_mgr_.config().mode) {
+            case ApiMode::LiteLLM_Proxy: std::cout << "LiteLLM Proxy"; break;
+            case ApiMode::OpenAI: std::cout << "OpenAI"; break;
+            case ApiMode::Anthropic: std::cout << "Anthropic"; break;
+            case ApiMode::Google: std::cout << "Google AI/Vertex"; break;
+            case ApiMode::Groq: std::cout << "Groq"; break;
+            case ApiMode::TogetherAI: std::cout << "TogetherAI"; break;
+            case ApiMode::OpenRouter: std::cout << "OpenRouter"; break;
+            case ApiMode::LlamaCpp: std::cout << "Llama.cpp (local)"; break;
+        }
+        std::cout << "\n│ Model: " << config_mgr_.config().model << "\n";
+        if (!config_mgr_.config().api_provider.empty()) {
+            std::cout << "│ Provider: " << config_mgr_.config().api_provider << "\n";
+        }
+        if (config_mgr_.config().mode == ApiMode::LiteLLM_Proxy) {
+            std::string url = config_mgr_.build_litellm_url();
+            std::cout << "│ LiteLLM URL: " << url << "\n";
+        } else if (config_mgr_.config().mode == ApiMode::LlamaCpp) {
+            std::cout << "│ Server: " << config_mgr_.config().llama_host 
+                      << ":" << config_mgr_.config().llama_port << "\n";
+        } else if (!config_mgr_.config().custom_base_url.empty()) {
+            std::cout << "│ Custom URL: " << config_mgr_.config().custom_base_url << "\n";
+        }
+        std::cout << "│ Work Dir: " << config_mgr_.config().work_dir << "\n";
+        std::cout << "│ Git: " << (config_mgr_.config().use_git ? "Enabled" : "Disabled") << "\n";
+        std::cout << "│ Max Tokens: " << config_mgr_.config().max_tokens << "\n";
+        std::cout << "│ Temperature: " << config_mgr_.config().temperature << "\n";
+        std::cout << "└─\n\n";
+    }
 };
 
-int main(int argc, char* argv[]) {
+int main(int /*argc*/, char* /*argv*/[]) {
     OpenCodeApp app;
     return app.run();
 }

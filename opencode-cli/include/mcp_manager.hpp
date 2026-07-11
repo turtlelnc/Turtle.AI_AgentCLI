@@ -33,6 +33,8 @@ private:
     std::string handle_read_file(const nlohmann::json& params);
     std::string handle_list_dir(const nlohmann::json& params);
     std::string handle_search_files(const nlohmann::json& params);
+    std::string handle_write_file(const nlohmann::json& params);      // NEW
+    std::string handle_run_command(const nlohmann::json& params);     // NEW
 };
 
 } // namespace opencode
