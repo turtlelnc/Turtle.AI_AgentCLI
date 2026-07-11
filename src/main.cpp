@@ -72,7 +72,6 @@ std::string readFile(const std::string& path) {
 // 解析并执行工具调用
 void executeToolCalls(const std::string& response, const std::string& work_dir) {
     // 匹配 DeepSeek/Claude 风格的工具调用：<｜tool_calls>...<｜/tool_calls>
-    // 使用简单字符串查找避免 regex 特殊字符问题
     std::string start_tag = "<｜tool_calls>";
     std::string end_tag = "<｜/tool_calls>";
     
@@ -105,12 +104,26 @@ void executeToolCalls(const std::string& response, const std::string& work_dir) 
         size_t content_end = tools_content.find(tool_end, content_start);
         if (content_end == std::string::npos) break;
         
-        std::string params_xml = tools_content.substr(content_start, content_end - content_start);
+        std::string params_raw = tools_content.substr(content_start, content_end - content_start);
         
         std::cout << "\n🔧 Executing tool: " << tool_name << std::endl;
         
-        // 提取参数 <param>value</param>
-        auto extractParam = [](const std::string& xml, const std::string& param_name) -> std::string {
+        // 尝试解析为 JSON 首先
+        nlohmann::json params_json;
+        bool is_json = false;
+        try {
+            params_json = nlohmann::json::parse(params_raw);
+            is_json = true;
+        } catch (...) {
+            // 不是有效 JSON，使用 XML 解析回退
+        }
+        
+        auto extractParamJson = [&](const std::string& param_name) -> std::string {
+            if (!is_json || !params_json.contains(param_name)) return "";
+            return params_json[param_name].get<std::string>();
+        };
+        
+        auto extractParamXml = [](const std::string& xml, const std::string& param_name) -> std::string {
             std::string open_tag = "<" + param_name + ">";
             std::string close_tag = "</" + param_name + ">";
             
@@ -124,12 +137,22 @@ void executeToolCalls(const std::string& response, const std::string& work_dir) 
             return xml.substr(start, end - start);
         };
         
+        auto extractParam = [&](const std::string& param_name) -> std::string {
+            return is_json ? extractParamJson(param_name) : extractParamXml(params_raw, param_name);
+        };
+        
         if (tool_name == "write_file") {
-            std::string path = extractParam(params_xml, "path");
-            std::string content = extractParam(params_xml, "content");
+            std::string path = extractParam("path");
+            std::string content = extractParam("content");
+            
+            if (path.empty()) {
+                std::cout << "   ❌ Missing 'path' parameter\n";
+                pos = content_end + tool_end.length();
+                continue;
+            }
             
             // 如果是相对路径，拼接工作目录
-            if (!path.empty() && path[0] != '/') {
+            if (path[0] != '/') {
                 path = work_dir + "/" + path;
             }
             
@@ -141,8 +164,13 @@ void executeToolCalls(const std::string& response, const std::string& work_dir) 
             }
             
         } else if (tool_name == "read_file") {
-            std::string path = extractParam(params_xml, "path");
-            if (!path.empty() && path[0] != '/') {
+            std::string path = extractParam("path");
+            if (path.empty()) {
+                std::cout << "   ❌ Missing 'path' parameter\n";
+                pos = content_end + tool_end.length();
+                continue;
+            }
+            if (path[0] != '/') {
                 path = work_dir + "/" + path;
             }
             
@@ -158,11 +186,16 @@ void executeToolCalls(const std::string& response, const std::string& work_dir) 
             }
             
         } else if (tool_name == "edit_file") {
-            std::string path = extractParam(params_xml, "path");
-            std::string old_text = extractParam(params_xml, "old_text");
-            std::string new_text = extractParam(params_xml, "new_text");
+            std::string path = extractParam("path");
+            std::string old_text = extractParam("old_text");
+            std::string new_text = extractParam("new_text");
             
-            if (!path.empty() && path[0] != '/') {
+            if (path.empty()) {
+                std::cout << "   ❌ Missing 'path' parameter\n";
+                pos = content_end + tool_end.length();
+                continue;
+            }
+            if (path[0] != '/') {
                 path = work_dir + "/" + path;
             }
             
@@ -185,7 +218,7 @@ void executeToolCalls(const std::string& response, const std::string& work_dir) 
             }
             
         } else if (tool_name == "run_terminal" || tool_name == "terminal" || tool_name == "execute_command") {
-            std::string command = extractParam(params_xml, "command");
+            std::string command = extractParam("command");
             
             if (!command.empty()) {
                 std::cout << "   💻 Executing: " << command << std::endl;
@@ -201,7 +234,7 @@ void executeToolCalls(const std::string& response, const std::string& work_dir) 
             }
             
         } else if (tool_name == "list_directory") {
-            std::string path = extractParam(params_xml, "path");
+            std::string path = extractParam("path");
             if (path.empty()) path = work_dir;
             if (path[0] != '/') {
                 path = work_dir + "/" + path;
