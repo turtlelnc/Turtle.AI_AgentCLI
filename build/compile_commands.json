@@ -1,0 +1,42 @@
+[
+{
+  "directory": "/workspace/opencode-cli/build",
+  "command": "/usr/bin/c++  -I/workspace/opencode-cli/include -Wall -Wextra -O2 -std=gnu++17 -o CMakeFiles/opencode.dir/src/main.cpp.o -c /workspace/opencode-cli/src/main.cpp",
+  "file": "/workspace/opencode-cli/src/main.cpp"
+},
+{
+  "directory": "/workspace/opencode-cli/build",
+  "command": "/usr/bin/c++  -I/workspace/opencode-cli/include -Wall -Wextra -O2 -std=gnu++17 -o CMakeFiles/opencode.dir/src/config_manager.cpp.o -c /workspace/opencode-cli/src/config_manager.cpp",
+  "file": "/workspace/opencode-cli/src/config_manager.cpp"
+},
+{
+  "directory": "/workspace/opencode-cli/build",
+  "command": "/usr/bin/c++  -I/workspace/opencode-cli/include -Wall -Wextra -O2 -std=gnu++17 -o CMakeFiles/opencode.dir/src/token_tracker.cpp.o -c /workspace/opencode-cli/src/token_tracker.cpp",
+  "file": "/workspace/opencode-cli/src/token_tracker.cpp"
+},
+{
+  "directory": "/workspace/opencode-cli/build",
+  "command": "/usr/bin/c++  -I/workspace/opencode-cli/include -Wall -Wextra -O2 -std=gnu++17 -o CMakeFiles/opencode.dir/src/git_manager.cpp.o -c /workspace/opencode-cli/src/git_manager.cpp",
+  "file": "/workspace/opencode-cli/src/git_manager.cpp"
+},
+{
+  "directory": "/workspace/opencode-cli/build",
+  "command": "/usr/bin/c++  -I/workspace/opencode-cli/include -Wall -Wextra -O2 -std=gnu++17 -o CMakeFiles/opencode.dir/src/mcp_manager.cpp.o -c /workspace/opencode-cli/src/mcp_manager.cpp",
+  "file": "/workspace/opencode-cli/src/mcp_manager.cpp"
+},
+{
+  "directory": "/workspace/opencode-cli/build",
+  "command": "/usr/bin/c++  -I/workspace/opencode-cli/include -Wall -Wextra -O2 -std=gnu++17 -o CMakeFiles/opencode.dir/src/http_client.cpp.o -c /workspace/opencode-cli/src/http_client.cpp",
+  "file": "/workspace/opencode-cli/src/http_client.cpp"
+},
+{
+  "directory": "/workspace/opencode-cli/build",
+  "command": "/usr/bin/c++  -I/workspace/opencode-cli/include -Wall -Wextra -O2 -std=gnu++17 -o CMakeFiles/opencode.dir/src/ui.cpp.o -c /workspace/opencode-cli/src/ui.cpp",
+  "file": "/workspace/opencode-cli/src/ui.cpp"
+},
+{
+  "directory": "/workspace/opencode-cli/build",
+  "command": "/usr/bin/c++  -I/workspace/opencode-cli/include -Wall -Wextra -O2 -std=gnu++17 -o CMakeFiles/opencode.dir/src/prompt.cpp.o -c /workspace/opencode-cli/src/prompt.cpp",
+  "file": "/workspace/opencode-cli/src/prompt.cpp"
+}
+]

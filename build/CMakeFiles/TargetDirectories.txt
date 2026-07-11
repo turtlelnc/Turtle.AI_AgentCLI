@@ -1,0 +1,3 @@
+/workspace/opencode-cli/build/CMakeFiles/opencode.dir
+/workspace/opencode-cli/build/CMakeFiles/edit_cache.dir
+/workspace/opencode-cli/build/CMakeFiles/rebuild_cache.dir
