@@ -71,36 +71,52 @@ std::string readFile(const std::string& path) {
 
 // 解析并执行工具调用
 void executeToolCalls(const std::string& response, const std::string& work_dir) {
-    // 匹配 DeepSeek/Claude 风格的工具调用：<｜tool_calls>...<｜/tool_calls>
-    std::string start_tag = "<｜tool_calls>";
-    std::string end_tag = "<｜/tool_calls>";
+    // 匹配 DeepSeek/Claude 风格的工具调用：<｜tool_calls｜>...<｜/tool_calls｜>
+    // 支持两种格式：带竖线和不带竖线
+    std::vector<std::string> start_tags = {"<｜tool_calls｜>", "<｜tool_calls>"};
+    std::vector<std::string> end_tags = {"<｜/tool_calls｜>", "<｜/tool_calls>"};
     
-    size_t start_pos = response.find(start_tag);
+    size_t start_pos = std::string::npos;
+    std::string start_tag_used, end_tag_used;
+    
+    for (size_t i = 0; i < start_tags.size(); ++i) {
+        size_t pos = response.find(start_tags[i]);
+        if (pos != std::string::npos) {
+            start_pos = pos;
+            start_tag_used = start_tags[i];
+            end_tag_used = end_tags[i];
+            break;
+        }
+    }
+    
     if (start_pos == std::string::npos) {
         return;  // 没有工具调用
     }
     
-    size_t end_pos = response.find(end_tag, start_pos);
+    size_t end_pos = response.find(end_tag_used, start_pos);
     if (end_pos == std::string::npos) {
         return;  // 格式不完整
     }
     
-    std::string tools_content = response.substr(start_pos + start_tag.length(), 
-                                                 end_pos - start_pos - start_tag.length());
+    std::string tools_content = response.substr(start_pos + start_tag_used.length(), 
+                                                 end_pos - start_pos - start_tag_used.length());
     
     // 提取每个工具调用 <｜tool_call name="...">...</｜tool_call>
-    std::string tool_start = "<｜tool_call name=\"";
-    std::string tool_end = "<｜/tool_call>";
+    std::vector<std::string> tool_start_tags = {"<｜tool_call name=\"", "<｜tool_call name=\""};
+    std::string tool_end = "</｜tool_call>";
     
     size_t pos = 0;
-    while ((pos = tools_content.find(tool_start, pos)) != std::string::npos) {
-        size_t name_start = pos + tool_start.length();
+    while ((pos = tools_content.find(tool_start_tags[0], pos)) != std::string::npos) {
+        size_t name_start = pos + tool_start_tags[0].length();
         size_t name_end = tools_content.find("\"", name_start);
         if (name_end == std::string::npos) break;
         
         std::string tool_name = tools_content.substr(name_start, name_end - name_start);
         
-        size_t content_start = tools_content.find(">", name_end) + 1;
+        size_t content_start = tools_content.find(">", name_end);
+        if (content_start == std::string::npos) break;
+        content_start += 1;
+        
         size_t content_end = tools_content.find(tool_end, content_start);
         if (content_end == std::string::npos) break;
         
