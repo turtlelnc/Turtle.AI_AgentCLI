@@ -1,4 +1,4 @@
-[README in English](https://github.com/turtlelnc/Turtle.AI_AgentCLI/blob/main/README_EN.md)
+[README in English](https://github.com/turtlelnc/Turtle.AI_AgentCLI/blob/main/README_EN.md) ｜[中文 README](https://github.com/turtlelnc/Turtle.AI_AgentCLI/blog/mian/README.md)
 
 # Turtle.AI AgentCLI
 
