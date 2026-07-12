@@ -8,9 +8,10 @@
 namespace opencode {
 
 struct ChatMessage {
-    std::string role;  // "system", "user", "assistant"
+    std::string role;  // "system", "user", "assistant", "tool"
     std::string content;
     nlohmann::json content_blocks = nullptr;  // For Anthropic multi-block content
+    std::string tool_call_id;  // For tool messages (OpenAI format)
 };
 
 struct ToolCall {

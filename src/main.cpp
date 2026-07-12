@@ -513,10 +513,15 @@ int main(int argc, char* argv[]) {
         // 执行原生 tool_calls (OpenAI/DeepSeek/Anthropic 格式)
         if (!response.tool_calls.empty()) {
             std::cout << "\n🔧 Executing " << response.tool_calls.size() << " native tool call(s)..." << std::endl;
+            
+            // 存储工具执行结果
+            std::vector<nlohmann::json> tool_results;
+            
             for (const auto& tc : response.tool_calls) {
                 std::cout << "   - " << tc.name << std::endl;
                 nlohmann::json args = tc.arguments.is_null() ? tc.input : tc.arguments;
                 nlohmann::json result = mcp_mgr.executeTool(tc.name, args);
+                tool_results.push_back(result);
                 
                 if (result.contains("error")) {
                     std::cout << "   ❌ Error: " << result["error"].get<std::string>() << std::endl;
@@ -529,16 +534,13 @@ int main(int argc, char* argv[]) {
                 }
             }
             
-            // 将工具调用结果添加为 assistant 消息
-            messages.push_back({"assistant", response.content});
-            
             // 添加工具调用结果到消息历史
             if (provider == ProviderType::Anthropic) {
                 // Anthropic 格式：使用 content_blocks
                 nlohmann::json content_blocks = nlohmann::json::array();
-                for (const auto& tc : response.tool_calls) {
-                    nlohmann::json args = tc.arguments.is_null() ? tc.input : tc.arguments;
-                    nlohmann::json result = mcp_mgr.executeTool(tc.name, args);
+                for (size_t i = 0; i < response.tool_calls.size(); i++) {
+                    const auto& tc = response.tool_calls[i];
+                    const auto& result = tool_results[i];
                     
                     nlohmann::json tool_result_block;
                     tool_result_block["type"] = "tool_result";
@@ -563,9 +565,9 @@ int main(int argc, char* argv[]) {
                 messages.push_back(tool_result_msg);
             } else {
                 // OpenAI/DeepSeek 格式：使用 tool role
-                for (const auto& tc : response.tool_calls) {
-                    nlohmann::json args = tc.arguments.is_null() ? tc.input : tc.arguments;
-                    nlohmann::json result = mcp_mgr.executeTool(tc.name, args);
+                for (size_t i = 0; i < response.tool_calls.size(); i++) {
+                    const auto& tc = response.tool_calls[i];
+                    const auto& result = tool_results[i];
                     
                     std::string result_content;
                     if (result.contains("error")) {
@@ -581,11 +583,28 @@ int main(int argc, char* argv[]) {
                     ChatMessage tool_msg;
                     tool_msg.role = "tool";
                     tool_msg.content = result_content;
-                    // 对于 OpenAI，需要在 content 中添加 tool_call_id 信息
-                    // 但由于我们的 ChatMessage 结构简单，这里简化处理
+                    tool_msg.tool_call_id = tc.id;  // 添加 tool_call_id
                     messages.push_back(tool_msg);
                 }
             }
+            
+            // 记录 token 使用
+            token_tracker.recordTokens(response.input_tokens, response.output_tokens);
+            
+            // 显示本次费用
+            ModelPricing pricing = TokenTracker::getModelPrice(model);
+            double this_cost = (static_cast<double>(response.input_tokens) / 1000000.0) * pricing.input_price_per_1m +
+                              (static_cast<double>(response.output_tokens) / 1000000.0) * pricing.output_price_per_1m;
+            
+            if (this_cost > 0.000001) {
+                std::cout << "   💰 This turn: $" << std::fixed << std::setprecision(6) << this_cost << " USD\n";
+            }
+            
+            // 显示累计统计
+            std::cout << "   📊 Session total: "
+                     << token_tracker.getTotalInputTokens() + token_tracker.getTotalOutputTokens()
+                     << " tokens, $" << std::fixed << std::setprecision(6)
+                     << token_tracker.getTotalCostUSD() << " USD\n\n";
             
             // 继续循环，让模型基于工具结果生成下一轮响应
             continue;

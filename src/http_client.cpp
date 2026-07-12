@@ -71,10 +71,15 @@ nlohmann::json HttpClient::buildRequestBody(const std::string& model, const std:
         body["messages"] = nlohmann::json::array();
         
         for (const auto& msg : messages) {
-            body["messages"].push_back({
+            nlohmann::json message = {
                 {"role", msg.role},
                 {"content", msg.content}
-            });
+            };
+            // 对于 tool 消息，添加 tool_call_id
+            if (msg.role == "tool" && !msg.tool_call_id.empty()) {
+                message["tool_call_id"] = msg.tool_call_id;
+            }
+            body["messages"].push_back(message);
         }
         
         body["stream"] = false;
