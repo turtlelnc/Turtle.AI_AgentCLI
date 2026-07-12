@@ -1,3 +1,5 @@
+[README in English](https://github.com/turtlelnc/Turtle.AI_AgentCLI/blob/main/README_EN.md) ｜[中文 README](https://github.com/turtlelnc/Turtle.AI_AgentCLI/blob/main/README.md)
+
 # Turtle.AI AgentCLI
 
 An AI assistant CLI tool similar to Claude Code CLI, written in C++17, with support for multiple API providers and LiteLLM-compatible interfaces.
