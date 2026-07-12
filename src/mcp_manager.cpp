@@ -5,6 +5,7 @@
 #include <array>
 #include <chrono>
 #include <future>
+#include <sys/wait.h>
 
 namespace opencode {
 
@@ -223,7 +224,14 @@ nlohmann::json MCPManager::listDir(const nlohmann::json& args) {
         return {{"success", false}, {"error", "Invalid path: contains '..'"}};
     }
     
-    std::string cmd = "ls -la \"" + path + "\" 2>&1";
+    std::string escaped_path = path;
+    size_t quote_pos = 0;
+    while ((quote_pos = escaped_path.find('"', quote_pos)) != std::string::npos) {
+        escaped_path.insert(quote_pos, "\\");
+        quote_pos += 2;
+    }
+
+    std::string cmd = "ls -la \"" + escaped_path + "\" 2>&1";
     std::array<char, 512> buffer;
     std::string result;
     

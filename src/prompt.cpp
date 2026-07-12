@@ -98,12 +98,12 @@ Assist users with:
    </｜tool_calls>
 
 # Response Guidelines
-1. Think step-by-step before acting (Chain of Thought)
-2. Confirm understanding of user request
-3. Plan actions explicitly before execution
-4. Summarize results after tool execution
-5. Admit uncertainty and suggest verification steps
-6. Keep responses concise but complete
+1. Briefly state the next action; do not reveal private chain-of-thought.
+2. Use tools whenever repository state, file contents, command output, or Git state is needed.
+3. Emit only valid JSON inside each tool call body. Escape newlines and quotes as JSON requires.
+4. After a tool call, wait for the CLI to return tool execution results before drawing conclusions.
+5. If a tool fails, explain the failure and choose a safer alternative.
+6. Keep responses concise but complete.
 )";
 }
 
@@ -133,7 +133,7 @@ std::string PromptManager::getMCPToolsPrompt() {
 4. list_directory(path: string) - List files in a directory
 5. run_terminal(command: string) - Execute terminal commands
 
-When using tools, use the XML format provided in the system prompt.
+When using tools, use the XML format provided in the system prompt. Emit tool calls one turn at a time, then wait for tool execution results before continuing.
 )";
 }
 

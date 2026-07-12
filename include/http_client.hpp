@@ -36,7 +36,7 @@ public:
     bool validateApiKey(const std::string& url, const std::string& api_key, const std::string& model);
     
 private:
-    std::string performCurlRequest(const std::string& url, const std::string& data, const std::string& api_key);
+    std::string performCurlRequest(const std::string& url, const std::string& data, const std::string& api_key, const std::string& provider_type);
     nlohmann::json buildRequestBody(const std::string& model, const std::vector<ChatMessage>& messages, const std::string& provider_type);
 };
 
