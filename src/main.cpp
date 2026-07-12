@@ -385,6 +385,8 @@ int main() {
     std::vector<ChatMessage> messages;
     messages.push_back({"system", prompt_mgr.getSystemPrompt()});
     
+    const std::vector<nlohmann::json> tools_schema = mcp_mgr.getToolsSchema();
+
     std::cout << "💬 Chat started. Type 'exit' or 'quit' to end session.\n";
     std::cout << "   Type 'stats' to view token usage.\n\n";
     
@@ -418,7 +420,8 @@ int main() {
             api_key,
             model,
             messages,
-            provider_str
+            provider_str,
+            tools_schema
         );
         
         if (!response.success) {

@@ -2,6 +2,7 @@
 #define HTTP_CLIENT_HPP
 
 #include <string>
+#include <vector>
 #include <nlohmann/json.hpp>
 
 namespace opencode {
@@ -29,7 +30,8 @@ public:
         const std::string& api_key,
         const std::string& model,
         const std::vector<ChatMessage>& messages,
-        const std::string& provider_type
+        const std::string& provider_type,
+        const std::vector<nlohmann::json>& tools_schema = {}
     );
     
     // 验证 API Key
@@ -37,7 +39,12 @@ public:
     
 private:
     std::string performCurlRequest(const std::string& url, const std::string& data, const std::string& api_key);
-    nlohmann::json buildRequestBody(const std::string& model, const std::vector<ChatMessage>& messages, const std::string& provider_type);
+    nlohmann::json buildRequestBody(
+        const std::string& model,
+        const std::vector<ChatMessage>& messages,
+        const std::string& provider_type,
+        const std::vector<nlohmann::json>& tools_schema
+    );
 };
 
 } // namespace opencode

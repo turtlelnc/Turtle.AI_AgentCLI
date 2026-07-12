@@ -56,11 +56,25 @@ std::string HttpClient::performCurlRequest(const std::string& url, const std::st
     return response_data;
 }
 
-nlohmann::json HttpClient::buildRequestBody(const std::string& model, const std::vector<ChatMessage>& messages, const std::string& provider_type) {
+nlohmann::json HttpClient::buildRequestBody(
+    const std::string& model,
+    const std::vector<ChatMessage>& messages,
+    const std::string& provider_type,
+    const std::vector<nlohmann::json>& tools_schema
+) {
     nlohmann::json body;
     
+    // Provider behavior:
+    // - DeepSeek/OpenAI use the OpenAI-compatible chat completions shape and support
+    //   native function calling via `tools` plus `tool_choice: "auto"`.
+    // - Anthropic and LlamaCpp continue relying on the XML fallback instructions in
+    //   the system prompt here; Anthropic has a different native tool schema, and
+    //   LlamaCpp endpoints vary, so avoid sending unsupported fields to local servers.
+    // - Unknown providers are kept minimal for validation/OpenAI-like compatibility.
+    const bool supports_native_tools = provider_type == "DeepSeek" || provider_type == "OpenAI";
+
     // DeepSeek/OpenAI/兼容格式
-    if (provider_type == "DeepSeek" || provider_type == "OpenAI" || provider_type == "Unknown") {
+    if (supports_native_tools || provider_type == "Unknown") {
         body["model"] = model;
         body["messages"] = nlohmann::json::array();
         
@@ -74,6 +88,11 @@ nlohmann::json HttpClient::buildRequestBody(const std::string& model, const std:
         body["stream"] = false;
         body["temperature"] = 0.7;
         body["max_tokens"] = 4096;
+
+        if (supports_native_tools && !tools_schema.empty()) {
+            body["tools"] = tools_schema;
+            body["tool_choice"] = "auto";
+        }
     }
     // Anthropic 格式
     else if (provider_type == "Anthropic") {
@@ -120,14 +139,15 @@ ChatResponse HttpClient::sendChatRequest(
     const std::string& api_key,
     const std::string& model,
     const std::vector<ChatMessage>& messages,
-    const std::string& provider_type
+    const std::string& provider_type,
+    const std::vector<nlohmann::json>& tools_schema
 ) {
     ChatResponse response;
     response.success = false;
     response.input_tokens = 0;
     response.output_tokens = 0;
     
-    nlohmann::json body = buildRequestBody(model, messages, provider_type);
+    nlohmann::json body = buildRequestBody(model, messages, provider_type, tools_schema);
     std::string result = performCurlRequest(url, body.dump(), api_key);
     
     try {
