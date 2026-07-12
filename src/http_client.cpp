@@ -143,8 +143,57 @@ ChatResponse HttpClient::sendChatRequest(
         // 解析响应 (OpenAI/DeepSeek 格式)
         if (json_result.contains("choices") && !json_result["choices"].empty()) {
             auto& choice = json_result["choices"][0];
-            if (choice.contains("message") && choice["message"].contains("content")) {
-                response.content = choice["message"]["content"].get<std::string>();
+            if (choice.contains("message")) {
+                const auto& message = choice["message"];
+                if (message.contains("content") && !message["content"].is_null()) {
+                    response.content = message["content"].get<std::string>();
+                }
+
+                if (message.contains("tool_calls") && message["tool_calls"].is_array()) {
+                    for (const auto& raw_tool_call : message["tool_calls"]) {
+                        ToolCall tool_call;
+
+                        if (raw_tool_call.contains("id") && raw_tool_call["id"].is_string()) {
+                            tool_call.id = raw_tool_call["id"].get<std::string>();
+                        }
+                        if (raw_tool_call.contains("type") && raw_tool_call["type"].is_string()) {
+                            tool_call.type = raw_tool_call["type"].get<std::string>();
+                        }
+
+                        if (raw_tool_call.contains("function")) {
+                            const auto& function = raw_tool_call["function"];
+                            if (function.contains("name") && function["name"].is_string()) {
+                                tool_call.name = function["name"].get<std::string>();
+                            }
+                            if (function.contains("arguments")) {
+                                if (function["arguments"].is_string()) {
+                                    const auto arguments = function["arguments"].get<std::string>();
+                                    if (!arguments.empty()) {
+                                        try {
+                                            tool_call.arguments = nlohmann::json::parse(arguments);
+                                        } catch (...) {
+                                            tool_call.arguments = nlohmann::json{{"raw", arguments}};
+                                        }
+                                    } else {
+                                        tool_call.arguments = nlohmann::json::object();
+                                    }
+                                } else {
+                                    tool_call.arguments = function["arguments"];
+                                }
+                            }
+                        }
+
+                        if (!tool_call.name.empty()) {
+                            if (tool_call.type.empty()) {
+                                tool_call.type = "function";
+                            }
+                            if (tool_call.arguments.is_null()) {
+                                tool_call.arguments = nlohmann::json::object();
+                            }
+                            response.tool_calls.push_back(tool_call);
+                        }
+                    }
+                }
             }
             
             if (json_result.contains("usage")) {
@@ -173,7 +222,7 @@ ChatResponse HttpClient::sendChatRequest(
             }
         }
         
-        response.success = !response.content.empty();
+        response.success = !response.content.empty() || !response.tool_calls.empty();
         
     } catch (const std::exception& e) {
         response.error_message = "JSON parse error: " + std::string(e.what());

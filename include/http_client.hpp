@@ -2,6 +2,7 @@
 #define HTTP_CLIENT_HPP
 
 #include <string>
+#include <vector>
 #include <nlohmann/json.hpp>
 
 namespace opencode {
@@ -11,8 +12,16 @@ struct ChatMessage {
     std::string content;
 };
 
+struct ToolCall {
+    std::string id;
+    std::string type;
+    std::string name;
+    nlohmann::json arguments;
+};
+
 struct ChatResponse {
     std::string content;
+    std::vector<ToolCall> tool_calls;
     int64_t input_tokens;
     int64_t output_tokens;
     bool success;
