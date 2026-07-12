@@ -14,7 +14,7 @@ HttpClient::HttpClient() {
     curl_global_init(CURL_GLOBAL_ALL);
 }
 
-std::string HttpClient::performCurlRequest(const std::string& url, const std::string& data, const std::string& api_key) {
+std::string HttpClient::performCurlRequest(const std::string& url, const std::string& data, const std::string& api_key, const std::string& provider_type) {
     CURL* curl = curl_easy_init();
     if (!curl) {
         return "{\"error\": \"Failed to initialize CURL\"}";
@@ -24,8 +24,14 @@ std::string HttpClient::performCurlRequest(const std::string& url, const std::st
     headers = curl_slist_append(headers, "Content-Type: application/json");
     
     if (!api_key.empty()) {
-        std::string auth_header = "Authorization: Bearer " + api_key;
-        headers = curl_slist_append(headers, auth_header.c_str());
+        if (provider_type == "Anthropic") {
+            std::string api_key_header = "x-api-key: " + api_key;
+            headers = curl_slist_append(headers, api_key_header.c_str());
+            headers = curl_slist_append(headers, "anthropic-version: 2023-06-01");
+        } else {
+            std::string auth_header = "Authorization: Bearer " + api_key;
+            headers = curl_slist_append(headers, auth_header.c_str());
+        }
     }
     
     curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
@@ -56,7 +62,7 @@ std::string HttpClient::performCurlRequest(const std::string& url, const std::st
     return response_data;
 }
 
-nlohmann::json HttpClient::buildRequestBody(const std::string& model, const std::vector<ChatMessage>& messages, const std::string& provider_type) {
+nlohmann::json HttpClient::buildRequestBody(const std::string& model, const std::vector<ChatMessage>& messages, const std::string& provider_type, const std::vector<nlohmann::json>& tools) {
     nlohmann::json body;
     
     // DeepSeek/OpenAI/兼容格式
@@ -74,6 +80,9 @@ nlohmann::json HttpClient::buildRequestBody(const std::string& model, const std:
         body["stream"] = false;
         body["temperature"] = 0.7;
         body["max_tokens"] = 4096;
+        if (!tools.empty()) {
+            body["tools"] = tools;
+        }
     }
     // Anthropic 格式
     else if (provider_type == "Anthropic") {
@@ -86,15 +95,31 @@ nlohmann::json HttpClient::buildRequestBody(const std::string& model, const std:
             if (msg.role == "system") {
                 system_content = msg.content;
             } else {
-                body["messages"].push_back({
-                    {"role", msg.role},
-                    {"content", msg.content}
-                });
+                nlohmann::json message = {{"role", msg.role}};
+                if (!msg.content_blocks.is_null()) {
+                    message["content"] = msg.content_blocks;
+                } else {
+                    message["content"] = msg.content;
+                }
+                body["messages"].push_back(message);
             }
         }
         
         if (!system_content.empty()) {
             body["system"] = system_content;
+        }
+        
+        if (!tools.empty()) {
+            body["tools"] = nlohmann::json::array();
+            for (const auto& tool : tools) {
+                if (tool.contains("function")) {
+                    body["tools"].push_back({
+                        {"name", tool["function"].value("name", "")},
+                        {"description", tool["function"].value("description", "")},
+                        {"input_schema", tool["function"].value("parameters", nlohmann::json::object())}
+                    });
+                }
+            }
         }
     }
     // LlamaCpp/Ollama 格式
@@ -120,15 +145,16 @@ ChatResponse HttpClient::sendChatRequest(
     const std::string& api_key,
     const std::string& model,
     const std::vector<ChatMessage>& messages,
-    const std::string& provider_type
+    const std::string& provider_type,
+    const std::vector<nlohmann::json>& tools
 ) {
     ChatResponse response;
     response.success = false;
     response.input_tokens = 0;
     response.output_tokens = 0;
     
-    nlohmann::json body = buildRequestBody(model, messages, provider_type);
-    std::string result = performCurlRequest(url, body.dump(), api_key);
+    nlohmann::json body = buildRequestBody(model, messages, provider_type, tools);
+    std::string result = performCurlRequest(url, body.dump(), api_key, provider_type);
     
     try {
         nlohmann::json json_result = nlohmann::json::parse(result);
@@ -157,10 +183,22 @@ ChatResponse HttpClient::sendChatRequest(
             }
         }
         // Anthropic 格式
-        else if (json_result.contains("content") && !json_result["content"].empty()) {
-            auto& content = json_result["content"][0];
-            if (content.contains("text")) {
-                response.content = content["text"].get<std::string>();
+        else if (json_result.contains("content") && json_result["content"].is_array()) {
+            response.content_blocks = json_result["content"];
+            for (const auto& content : json_result["content"]) {
+                std::string type = content.value("type", "");
+                if (type == "text" && content.contains("text") && content["text"].is_string()) {
+                    if (!response.content.empty()) {
+                        response.content += "\n";
+                    }
+                    response.content += content["text"].get<std::string>();
+                } else if (type == "tool_use") {
+                    ToolCall call;
+                    call.id = content.value("id", "");
+                    call.name = content.value("name", "");
+                    call.input = content.contains("input") ? content["input"] : nlohmann::json::object();
+                    response.tool_calls.push_back(call);
+                }
             }
             
             if (json_result.contains("usage")) {
@@ -173,7 +211,7 @@ ChatResponse HttpClient::sendChatRequest(
             }
         }
         
-        response.success = !response.content.empty();
+        response.success = !response.content.empty() || !response.tool_calls.empty();
         
     } catch (const std::exception& e) {
         response.error_message = "JSON parse error: " + std::string(e.what());

@@ -69,6 +69,50 @@ std::string readFile(const std::string& path) {
     return buffer.str();
 }
 
+
+std::string resolveToolPath(const std::string& path, const std::string& work_dir) {
+    if (path.empty() || path[0] == '/') {
+        return path;
+    }
+    return work_dir + "/" + path;
+}
+
+nlohmann::json executeNativeToolCalls(
+    const std::vector<ToolCall>& tool_calls,
+    MCPManager& mcp_mgr,
+    const std::string& work_dir
+) {
+    nlohmann::json tool_results = nlohmann::json::array();
+
+    for (const auto& tool_call : tool_calls) {
+        nlohmann::json args = tool_call.input.is_null() ? nlohmann::json::object() : tool_call.input;
+        if (!args.is_object()) {
+            args = nlohmann::json::object({{"input", args}});
+        }
+
+        if (args.contains("path") && args["path"].is_string()) {
+            args["path"] = resolveToolPath(args["path"].get<std::string>(), work_dir);
+        }
+
+        std::cout << "\n🔧 Executing tool: " << tool_call.name;
+        if (!tool_call.id.empty()) {
+            std::cout << " (" << tool_call.id << ")";
+        }
+        std::cout << std::endl;
+
+        nlohmann::json result = mcp_mgr.executeTool(tool_call.name, args);
+        std::cout << "   " << result.dump(2) << std::endl;
+
+        tool_results.push_back({
+            {"type", "tool_result"},
+            {"tool_use_id", tool_call.id},
+            {"content", result.dump()}
+        });
+    }
+
+    return tool_results;
+}
+
 // 解析并执行工具调用
 void executeToolCalls(const std::string& response, const std::string& work_dir) {
     // 匹配 DeepSeek/Claude 风格的工具调用：<｜tool_calls｜>...<｜/tool_calls｜>
@@ -411,42 +455,70 @@ int main() {
         // 添加用户消息
         messages.push_back({"user", user_input});
         
-        // 发送请求
+        // 发送请求，并在模型返回原生工具调用时循环执行并回传结果
         std::string provider_str = ConfigManager::providerToString(provider);
-        ChatResponse response = http_client.sendChatRequest(
-            api_url,
-            api_key,
-            model,
-            messages,
-            provider_str
-        );
+        int tool_rounds = 0;
+        bool request_failed = false;
+        while (true) {
+            ChatResponse response = http_client.sendChatRequest(
+                api_url,
+                api_key,
+                model,
+                messages,
+                provider_str,
+                mcp_mgr.getToolsSchema()
+            );
+            
+            if (!response.success) {
+                ui.showError("API Error: " + response.error_message);
+                messages.pop_back();  // 移除失败的用户消息
+                request_failed = true;
+                break;
+            }
+            
+            // 显示 AI 响应（纯工具调用响应可能没有文本内容）
+            if (!response.content.empty()) {
+                ui.showAIResponse(response.content);
+            }
+            
+            // 记录 token 使用
+            token_tracker.recordTokens(response.input_tokens, response.output_tokens);
+            
+            // 显示本次费用
+            ModelPricing pricing = TokenTracker::getModelPrice(model);
+            double this_cost = (static_cast<double>(response.input_tokens) / 1000000.0) * pricing.input_price_per_1m +
+                              (static_cast<double>(response.output_tokens) / 1000000.0) * pricing.output_price_per_1m;
+            
+            if (this_cost > 0.000001) {
+                std::cout << "   💰 This turn: $" << std::fixed << std::setprecision(6) << this_cost << " USD\n";
+            }
+            
+            // 添加 AI 响应到历史，Anthropic 工具调用需要保留原始 content blocks
+            ChatMessage assistant_message{"assistant", response.content};
+            if (!response.content_blocks.is_null()) {
+                assistant_message.content_blocks = response.content_blocks;
+            }
+            messages.push_back(assistant_message);
+
+            if (response.tool_calls.empty()) {
+                break;
+            }
+
+            nlohmann::json tool_results = executeNativeToolCalls(response.tool_calls, mcp_mgr, work_dir);
+            ChatMessage tool_result_message{"user", ""};
+            tool_result_message.content_blocks = tool_results;
+            messages.push_back(tool_result_message);
+
+            ++tool_rounds;
+            if (tool_rounds >= 8) {
+                ui.showError("Stopped after 8 consecutive tool-call rounds");
+                break;
+            }
+        }
         
-        if (!response.success) {
-            ui.showError("API Error: " + response.error_message);
-            messages.pop_back();  // 移除失败的用户消息
+        if (request_failed) {
             continue;
         }
-        
-        // 显示 AI 响应
-        ui.showAIResponse(response.content);
-        
-        // 解析并执行工具调用 (在添加到历史之前)
-        executeToolCalls(response.content, work_dir);
-        
-        // 记录 token 使用
-        token_tracker.recordTokens(response.input_tokens, response.output_tokens);
-        
-        // 显示本次费用
-        ModelPricing pricing = TokenTracker::getModelPrice(model);
-        double this_cost = (static_cast<double>(response.input_tokens) / 1000000.0) * pricing.input_price_per_1m +
-                          (static_cast<double>(response.output_tokens) / 1000000.0) * pricing.output_price_per_1m;
-        
-        if (this_cost > 0.000001) {
-            std::cout << "   💰 This turn: $" << std::fixed << std::setprecision(6) << this_cost << " USD\n";
-        }
-        
-        // 添加 AI 响应到历史
-        messages.push_back({"assistant", response.content});
         
         // 显示累计统计
         std::cout << "   📊 Session total: " 

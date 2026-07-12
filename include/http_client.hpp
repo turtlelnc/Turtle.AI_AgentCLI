@@ -2,6 +2,7 @@
 #define HTTP_CLIENT_HPP
 
 #include <string>
+#include <vector>
 #include <nlohmann/json.hpp>
 
 namespace opencode {
@@ -9,6 +10,13 @@ namespace opencode {
 struct ChatMessage {
     std::string role;  // "system", "user", "assistant"
     std::string content;
+    nlohmann::json content_blocks = nullptr;
+};
+
+struct ToolCall {
+    std::string id;
+    std::string name;
+    nlohmann::json input;
 };
 
 struct ChatResponse {
@@ -17,6 +25,8 @@ struct ChatResponse {
     int64_t output_tokens;
     bool success;
     std::string error_message;
+    std::vector<ToolCall> tool_calls;
+    nlohmann::json content_blocks;
 };
 
 class HttpClient {
@@ -29,15 +39,16 @@ public:
         const std::string& api_key,
         const std::string& model,
         const std::vector<ChatMessage>& messages,
-        const std::string& provider_type
+        const std::string& provider_type,
+        const std::vector<nlohmann::json>& tools = {}
     );
     
     // 验证 API Key
     bool validateApiKey(const std::string& url, const std::string& api_key, const std::string& model);
     
 private:
-    std::string performCurlRequest(const std::string& url, const std::string& data, const std::string& api_key);
-    nlohmann::json buildRequestBody(const std::string& model, const std::vector<ChatMessage>& messages, const std::string& provider_type);
+    std::string performCurlRequest(const std::string& url, const std::string& data, const std::string& api_key, const std::string& provider_type);
+    nlohmann::json buildRequestBody(const std::string& model, const std::vector<ChatMessage>& messages, const std::string& provider_type, const std::vector<nlohmann::json>& tools);
 };
 
 } // namespace opencode
