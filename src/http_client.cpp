@@ -169,8 +169,32 @@ ChatResponse HttpClient::sendChatRequest(
         // 解析响应 (OpenAI/DeepSeek 格式)
         if (json_result.contains("choices") && !json_result["choices"].empty()) {
             auto& choice = json_result["choices"][0];
-            if (choice.contains("message") && choice["message"].contains("content")) {
-                response.content = choice["message"]["content"].get<std::string>();
+            if (choice.contains("message")) {
+                auto& message = choice["message"];
+                
+                // 解析文本内容
+                if (message.contains("content") && !message["content"].is_null()) {
+                    response.content = message["content"].get<std::string>();
+                }
+                
+                // 解析原生 tool_calls (OpenAI/DeepSeek 格式)
+                if (message.contains("tool_calls") && message["tool_calls"].is_array()) {
+                    for (const auto& tc : message["tool_calls"]) {
+                        ToolCall call;
+                        call.id = tc.value("id", "");
+                        call.type = tc.value("type", "function");
+                        if (tc.contains("function")) {
+                            call.name = tc["function"].value("name", "");
+                            std::string args_str = tc["function"].value("arguments", "{}");
+                            try {
+                                call.arguments = nlohmann::json::parse(args_str);
+                            } catch (...) {
+                                call.arguments = nlohmann::json::object();
+                            }
+                        }
+                        response.tool_calls.push_back(call);
+                    }
+                }
             }
             
             if (json_result.contains("usage")) {

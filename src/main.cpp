@@ -159,20 +159,20 @@ std::vector<ParsedToolCall> parseToolCalls(const std::string& response) {
 bool runToolCallParserChecks() {
     const std::vector<std::pair<std::string, ParsedToolCall>> checks = {
         {
-            "<｜tool_calls｜><｜tool_call name=\"run_terminal\">{\"command\":\"echo current\"}</｜tool_call></｜tool_calls｜>",
-            {"run_terminal", "{\"command\":\"echo current\"}"}
+            "<｜tool_calls｜><｜tool_call name="run_terminal">{"command":"echo current"}</｜tool_call></｜tool_calls｜>",
+            {"run_terminal", "{"command":"echo current"}"}
         },
         {
-            "<tool_calls><tool_call name=\"read_file\">{\"path\":\"README.md\"}</tool_call></tool_calls>",
-            {"read_file", "{\"path\":\"README.md\"}"}
+            "<tool_calls><tool_call name="read_file">{"path":"README.md"}</tool_call></tool_calls>",
+            {"read_file", "{"path":"README.md"}"}
         },
         {
-            "<tool_calls><tool_call   name='terminal'>{\"command\":\"pwd\"}</tool_call></tool_calls>",
-            {"terminal", "{\"command\":\"pwd\"}"}
+            "<tool_calls><tool_call   name='terminal'>{"command":"pwd"}</tool_call></tool_calls>",
+            {"terminal", "{"command":"pwd"}"}
         },
         {
-            "<tool_calls><tool_call name=\"execute_command\">```json\n{\"command\":\"echo fenced\"}\n```</tool_call></tool_calls>",
-            {"execute_command", "{\"command\":\"echo fenced\"}"}
+            "<tool_calls><tool_call name="execute_command">```json\n{"command":"echo fenced"}\n```</tool_call></tool_calls>",
+            {"execute_command", "{"command":"echo fenced"}"}
         }
     };
 
@@ -333,7 +333,7 @@ void executeToolCalls(const std::string& response, const std::string& work_dir) 
             }
             
             std::cout << "   📁 Listing: " << path << std::endl;
-            std::string cmd = "ls -la \"" + path + "\"";
+            std::string cmd = "ls -la "" + path + """;
             std::string output = executeCommand(cmd);
             if (!output.empty()) {
                 std::cout << "   ───────────────────────────────\n";
@@ -489,14 +489,16 @@ int main(int argc, char* argv[]) {
         // 添加用户消息
         messages.push_back({"user", user_input});
         
-        // 发送请求
+        // 获取工具 schema 并发送请求
+        std::vector<nlohmann::json> tools_schema = mcp_mgr.getToolsSchema();
         std::string provider_str = ConfigManager::providerToString(provider);
         ChatResponse response = http_client.sendChatRequest(
             api_url,
             api_key,
             model,
             messages,
-            provider_str
+            provider_str,
+            tools_schema
         );
         
         if (!response.success) {
@@ -508,7 +510,88 @@ int main(int argc, char* argv[]) {
         // 显示 AI 响应
         ui.showAIResponse(response.content);
         
-        // 解析并执行工具调用 (在添加到历史之前)
+        // 执行原生 tool_calls (OpenAI/DeepSeek/Anthropic 格式)
+        if (!response.tool_calls.empty()) {
+            std::cout << "\n🔧 Executing " << response.tool_calls.size() << " native tool call(s)..." << std::endl;
+            for (const auto& tc : response.tool_calls) {
+                std::cout << "   - " << tc.name << std::endl;
+                nlohmann::json args = tc.arguments.is_null() ? tc.input : tc.arguments;
+                nlohmann::json result = mcp_mgr.executeTool(tc.name, args);
+                
+                if (result.contains("error")) {
+                    std::cout << "   ❌ Error: " << result["error"].get<std::string>() << std::endl;
+                } else if (result.contains("output")) {
+                    std::cout << "   ✅ Result: " << result["output"].get<std::string>() << std::endl;
+                } else if (result.contains("content")) {
+                    std::cout << "   ✅ Content:\n" << result["content"].get<std::string>() << std::endl;
+                } else {
+                    std::cout << "   ✅ Success" << std::endl;
+                }
+            }
+            
+            // 将工具调用结果添加为 assistant 消息
+            messages.push_back({"assistant", response.content});
+            
+            // 添加工具调用结果到消息历史
+            if (provider == ProviderType::Anthropic) {
+                // Anthropic 格式：使用 content_blocks
+                nlohmann::json content_blocks = nlohmann::json::array();
+                for (const auto& tc : response.tool_calls) {
+                    nlohmann::json args = tc.arguments.is_null() ? tc.input : tc.arguments;
+                    nlohmann::json result = mcp_mgr.executeTool(tc.name, args);
+                    
+                    nlohmann::json tool_result_block;
+                    tool_result_block["type"] = "tool_result";
+                    tool_result_block["tool_use_id"] = tc.id;
+                    if (result.contains("error")) {
+                        tool_result_block["content"] = result["error"].get<std::string>();
+                        tool_result_block["is_error"] = true;
+                    } else if (result.contains("output")) {
+                        tool_result_block["content"] = result["output"].get<std::string>();
+                    } else if (result.contains("content")) {
+                        tool_result_block["content"] = result["content"].get<std::string>();
+                    } else {
+                        tool_result_block["content"] = "Success";
+                    }
+                    content_blocks.push_back(tool_result_block);
+                }
+                
+                ChatMessage tool_result_msg;
+                tool_result_msg.role = "user";
+                tool_result_msg.content = "";
+                tool_result_msg.content_blocks = content_blocks;
+                messages.push_back(tool_result_msg);
+            } else {
+                // OpenAI/DeepSeek 格式：使用 tool role
+                for (const auto& tc : response.tool_calls) {
+                    nlohmann::json args = tc.arguments.is_null() ? tc.input : tc.arguments;
+                    nlohmann::json result = mcp_mgr.executeTool(tc.name, args);
+                    
+                    std::string result_content;
+                    if (result.contains("error")) {
+                        result_content = "Error: " + result["error"].get<std::string>();
+                    } else if (result.contains("output")) {
+                        result_content = result["output"].get<std::string>();
+                    } else if (result.contains("content")) {
+                        result_content = result["content"].get<std::string>();
+                    } else {
+                        result_content = "Success";
+                    }
+                    
+                    ChatMessage tool_msg;
+                    tool_msg.role = "tool";
+                    tool_msg.content = result_content;
+                    // 对于 OpenAI，需要在 content 中添加 tool_call_id 信息
+                    // 但由于我们的 ChatMessage 结构简单，这里简化处理
+                    messages.push_back(tool_msg);
+                }
+            }
+            
+            // 继续循环，让模型基于工具结果生成下一轮响应
+            continue;
+        }
+        
+        // 解析并执行 XML 格式的工具调用 (回退方案)
         executeToolCalls(response.content, work_dir);
         
         // 记录 token 使用
