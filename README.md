@@ -1,3 +1,5 @@
+[README in English](https://github.com/turtlelnc/Turtle.AI_AgentCLI/blob/main/README_EN.md)
+
 # Turtle.AI AgentCLI
 
 一个使用 C++17 编写的类 Claude Code CLI 的 AI 助手工具，支持多 API 提供商和 LiteLLM 兼容接口。
