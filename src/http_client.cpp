@@ -14,7 +14,7 @@ HttpClient::HttpClient() {
     curl_global_init(CURL_GLOBAL_ALL);
 }
 
-std::string HttpClient::performCurlRequest(const std::string& url, const std::string& data, const std::string& api_key) {
+std::string HttpClient::performCurlRequest(const std::string& url, const std::string& data, const std::string& api_key, const std::string& provider_type) {
     CURL* curl = curl_easy_init();
     if (!curl) {
         return "{\"error\": \"Failed to initialize CURL\"}";
@@ -24,8 +24,14 @@ std::string HttpClient::performCurlRequest(const std::string& url, const std::st
     headers = curl_slist_append(headers, "Content-Type: application/json");
     
     if (!api_key.empty()) {
-        std::string auth_header = "Authorization: Bearer " + api_key;
-        headers = curl_slist_append(headers, auth_header.c_str());
+        if (provider_type == "Anthropic") {
+            std::string api_key_header = "x-api-key: " + api_key;
+            headers = curl_slist_append(headers, api_key_header.c_str());
+            headers = curl_slist_append(headers, "anthropic-version: 2023-06-01");
+        } else {
+            std::string auth_header = "Authorization: Bearer " + api_key;
+            headers = curl_slist_append(headers, auth_header.c_str());
+        }
     }
     
     curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
@@ -56,25 +62,11 @@ std::string HttpClient::performCurlRequest(const std::string& url, const std::st
     return response_data;
 }
 
-nlohmann::json HttpClient::buildRequestBody(
-    const std::string& model,
-    const std::vector<ChatMessage>& messages,
-    const std::string& provider_type,
-    const std::vector<nlohmann::json>& tools_schema
-) {
+nlohmann::json HttpClient::buildRequestBody(const std::string& model, const std::vector<ChatMessage>& messages, const std::string& provider_type, const std::vector<nlohmann::json>& tools) {
     nlohmann::json body;
     
-    // Provider behavior:
-    // - DeepSeek/OpenAI use the OpenAI-compatible chat completions shape and support
-    //   native function calling via `tools` plus `tool_choice: "auto"`.
-    // - Anthropic and LlamaCpp continue relying on the XML fallback instructions in
-    //   the system prompt here; Anthropic has a different native tool schema, and
-    //   LlamaCpp endpoints vary, so avoid sending unsupported fields to local servers.
-    // - Unknown providers are kept minimal for validation/OpenAI-like compatibility.
-    const bool supports_native_tools = provider_type == "DeepSeek" || provider_type == "OpenAI";
-
     // DeepSeek/OpenAI/兼容格式
-    if (supports_native_tools || provider_type == "Unknown") {
+    if (provider_type == "DeepSeek" || provider_type == "OpenAI" || provider_type == "Unknown") {
         body["model"] = model;
         body["messages"] = nlohmann::json::array();
         
@@ -88,10 +80,8 @@ nlohmann::json HttpClient::buildRequestBody(
         body["stream"] = false;
         body["temperature"] = 0.7;
         body["max_tokens"] = 4096;
-
-        if (supports_native_tools && !tools_schema.empty()) {
-            body["tools"] = tools_schema;
-            body["tool_choice"] = "auto";
+        if (!tools.empty()) {
+            body["tools"] = tools;
         }
     }
     // Anthropic 格式
@@ -105,15 +95,31 @@ nlohmann::json HttpClient::buildRequestBody(
             if (msg.role == "system") {
                 system_content = msg.content;
             } else {
-                body["messages"].push_back({
-                    {"role", msg.role},
-                    {"content", msg.content}
-                });
+                nlohmann::json message = {{"role", msg.role}};
+                if (!msg.content_blocks.is_null()) {
+                    message["content"] = msg.content_blocks;
+                } else {
+                    message["content"] = msg.content;
+                }
+                body["messages"].push_back(message);
             }
         }
         
         if (!system_content.empty()) {
             body["system"] = system_content;
+        }
+        
+        if (!tools.empty()) {
+            body["tools"] = nlohmann::json::array();
+            for (const auto& tool : tools) {
+                if (tool.contains("function")) {
+                    body["tools"].push_back({
+                        {"name", tool["function"].value("name", "")},
+                        {"description", tool["function"].value("description", "")},
+                        {"input_schema", tool["function"].value("parameters", nlohmann::json::object())}
+                    });
+                }
+            }
         }
     }
     // LlamaCpp/Ollama 格式
@@ -140,15 +146,15 @@ ChatResponse HttpClient::sendChatRequest(
     const std::string& model,
     const std::vector<ChatMessage>& messages,
     const std::string& provider_type,
-    const std::vector<nlohmann::json>& tools_schema
+    const std::vector<nlohmann::json>& tools
 ) {
     ChatResponse response;
     response.success = false;
     response.input_tokens = 0;
     response.output_tokens = 0;
     
-    nlohmann::json body = buildRequestBody(model, messages, provider_type, tools_schema);
-    std::string result = performCurlRequest(url, body.dump(), api_key);
+    nlohmann::json body = buildRequestBody(model, messages, provider_type, tools);
+    std::string result = performCurlRequest(url, body.dump(), api_key, provider_type);
     
     try {
         nlohmann::json json_result = nlohmann::json::parse(result);
@@ -163,57 +169,8 @@ ChatResponse HttpClient::sendChatRequest(
         // 解析响应 (OpenAI/DeepSeek 格式)
         if (json_result.contains("choices") && !json_result["choices"].empty()) {
             auto& choice = json_result["choices"][0];
-            if (choice.contains("message")) {
-                const auto& message = choice["message"];
-                if (message.contains("content") && !message["content"].is_null()) {
-                    response.content = message["content"].get<std::string>();
-                }
-
-                if (message.contains("tool_calls") && message["tool_calls"].is_array()) {
-                    for (const auto& raw_tool_call : message["tool_calls"]) {
-                        ToolCall tool_call;
-
-                        if (raw_tool_call.contains("id") && raw_tool_call["id"].is_string()) {
-                            tool_call.id = raw_tool_call["id"].get<std::string>();
-                        }
-                        if (raw_tool_call.contains("type") && raw_tool_call["type"].is_string()) {
-                            tool_call.type = raw_tool_call["type"].get<std::string>();
-                        }
-
-                        if (raw_tool_call.contains("function")) {
-                            const auto& function = raw_tool_call["function"];
-                            if (function.contains("name") && function["name"].is_string()) {
-                                tool_call.name = function["name"].get<std::string>();
-                            }
-                            if (function.contains("arguments")) {
-                                if (function["arguments"].is_string()) {
-                                    const auto arguments = function["arguments"].get<std::string>();
-                                    if (!arguments.empty()) {
-                                        try {
-                                            tool_call.arguments = nlohmann::json::parse(arguments);
-                                        } catch (...) {
-                                            tool_call.arguments = nlohmann::json{{"raw", arguments}};
-                                        }
-                                    } else {
-                                        tool_call.arguments = nlohmann::json::object();
-                                    }
-                                } else {
-                                    tool_call.arguments = function["arguments"];
-                                }
-                            }
-                        }
-
-                        if (!tool_call.name.empty()) {
-                            if (tool_call.type.empty()) {
-                                tool_call.type = "function";
-                            }
-                            if (tool_call.arguments.is_null()) {
-                                tool_call.arguments = nlohmann::json::object();
-                            }
-                            response.tool_calls.push_back(tool_call);
-                        }
-                    }
-                }
+            if (choice.contains("message") && choice["message"].contains("content")) {
+                response.content = choice["message"]["content"].get<std::string>();
             }
             
             if (json_result.contains("usage")) {
@@ -226,10 +183,22 @@ ChatResponse HttpClient::sendChatRequest(
             }
         }
         // Anthropic 格式
-        else if (json_result.contains("content") && !json_result["content"].empty()) {
-            auto& content = json_result["content"][0];
-            if (content.contains("text")) {
-                response.content = content["text"].get<std::string>();
+        else if (json_result.contains("content") && json_result["content"].is_array()) {
+            response.content_blocks = json_result["content"];
+            for (const auto& content : json_result["content"]) {
+                std::string type = content.value("type", "");
+                if (type == "text" && content.contains("text") && content["text"].is_string()) {
+                    if (!response.content.empty()) {
+                        response.content += "\n";
+                    }
+                    response.content += content["text"].get<std::string>();
+                } else if (type == "tool_use") {
+                    ToolCall call;
+                    call.id = content.value("id", "");
+                    call.name = content.value("name", "");
+                    call.input = content.contains("input") ? content["input"] : nlohmann::json::object();
+                    response.tool_calls.push_back(call);
+                }
             }
             
             if (json_result.contains("usage")) {

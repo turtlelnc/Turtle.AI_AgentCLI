@@ -10,13 +10,15 @@ namespace opencode {
 struct ChatMessage {
     std::string role;  // "system", "user", "assistant"
     std::string content;
+    nlohmann::json content_blocks = nullptr;  // For Anthropic multi-block content
 };
 
 struct ToolCall {
     std::string id;
     std::string type;
     std::string name;
-    nlohmann::json arguments;
+    nlohmann::json arguments;  // OpenAI format: function.arguments
+    nlohmann::json input;      // Anthropic format: tool_use.input
 };
 
 struct ChatResponse {
@@ -26,6 +28,7 @@ struct ChatResponse {
     int64_t output_tokens;
     bool success;
     std::string error_message;
+    nlohmann::json content_blocks;  // For Anthropic response parsing
 };
 
 class HttpClient {
@@ -39,19 +42,19 @@ public:
         const std::string& model,
         const std::vector<ChatMessage>& messages,
         const std::string& provider_type,
-        const std::vector<nlohmann::json>& tools_schema = {}
+        const std::vector<nlohmann::json>& tools = {}
     );
     
     // 验证 API Key
     bool validateApiKey(const std::string& url, const std::string& api_key, const std::string& model);
-    
+
 private:
-    std::string performCurlRequest(const std::string& url, const std::string& data, const std::string& api_key);
+    std::string performCurlRequest(const std::string& url, const std::string& data, const std::string& api_key, const std::string& provider_type);
     nlohmann::json buildRequestBody(
         const std::string& model,
         const std::vector<ChatMessage>& messages,
         const std::string& provider_type,
-        const std::vector<nlohmann::json>& tools_schema
+        const std::vector<nlohmann::json>& tools
     );
 };
 

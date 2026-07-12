@@ -69,46 +69,52 @@ std::string readFile(const std::string& path) {
     return buffer.str();
 }
 
-// 将相对文件系统路径限定到用户选择的工作目录
-void qualifyPathArgument(nlohmann::json& args, const std::string& key, const std::string& work_dir) {
-    if (!args.contains(key) || !args[key].is_string()) {
-        return;
-    }
 
-    std::string path = args[key].get<std::string>();
-    if (!path.empty() && path[0] != '/') {
-        args[key] = work_dir + "/" + path;
+std::string resolveToolPath(const std::string& path, const std::string& work_dir) {
+    if (path.empty() || path[0] == '/') {
+        return path;
     }
+    return work_dir + "/" + path;
 }
 
-// 通过 MCP 管理器执行工具调用，并打印统一的执行结果
-void executeMCPToolCall(MCPManager& mcp_mgr, const std::string& tool_name, nlohmann::json args, const std::string& work_dir) {
-    std::cout << "\n🔧 Executing tool: " << tool_name << std::endl;
+nlohmann::json executeNativeToolCalls(
+    const std::vector<ToolCall>& tool_calls,
+    MCPManager& mcp_mgr,
+    const std::string& work_dir
+) {
+    nlohmann::json tool_results = nlohmann::json::array();
 
-    if (tool_name == "read_file" || tool_name == "write_file" || tool_name == "edit_file") {
-        qualifyPathArgument(args, "path", work_dir);
-    } else if (tool_name == "list_directory") {
-        if (!args.contains("path") || !args["path"].is_string() || args["path"].get<std::string>().empty()) {
-            args["path"] = work_dir;
-        } else {
-            qualifyPathArgument(args, "path", work_dir);
-        }
-    }
-
-    nlohmann::json result = mcp_mgr.executeTool(tool_name, args);
-    bool success = result.value("success", false);
-    std::cout << "   " << (success ? "✅" : "❌") << " " << result.dump(2) << "\n";
-}
-
-// 执行模型原生 tool_calls 响应
-void executeNativeToolCalls(const std::vector<ToolCall>& tool_calls, const std::string& work_dir, MCPManager& mcp_mgr) {
     for (const auto& tool_call : tool_calls) {
-        executeMCPToolCall(mcp_mgr, tool_call.name, tool_call.arguments, work_dir);
+        nlohmann::json args = tool_call.input.is_null() ? nlohmann::json::object() : tool_call.input;
+        if (!args.is_object()) {
+            args = nlohmann::json::object({{"input", args}});
+        }
+
+        if (args.contains("path") && args["path"].is_string()) {
+            args["path"] = resolveToolPath(args["path"].get<std::string>(), work_dir);
+        }
+
+        std::cout << "\n🔧 Executing tool: " << tool_call.name;
+        if (!tool_call.id.empty()) {
+            std::cout << " (" << tool_call.id << ")";
+        }
+        std::cout << std::endl;
+
+        nlohmann::json result = mcp_mgr.executeTool(tool_call.name, args);
+        std::cout << "   " << result.dump(2) << std::endl;
+
+        tool_results.push_back({
+            {"type", "tool_result"},
+            {"tool_use_id", tool_call.id},
+            {"content", result.dump()}
+        });
     }
+
+    return tool_results;
 }
 
-// 解析并执行提示词/XML 格式工具调用，作为不支持原生 tool_calls 模型的回退
-void executeToolCalls(const std::string& response, const std::string& work_dir, MCPManager& mcp_mgr) {
+// 解析并执行工具调用
+void executeToolCalls(const std::string& response, const std::string& work_dir) {
     // 匹配 DeepSeek/Claude 风格的工具调用：<｜tool_calls｜>...<｜/tool_calls｜>
     // 支持两种格式：带竖线和不带竖线
     std::vector<std::string> start_tags = {"<｜tool_calls｜>", "<｜tool_calls>"};
@@ -140,12 +146,12 @@ void executeToolCalls(const std::string& response, const std::string& work_dir, 
                                                  end_pos - start_pos - start_tag_used.length());
     
     // 提取每个工具调用 <｜tool_call name="...">...</｜tool_call>
-    std::string tool_start = "<｜tool_call name=\"";
+    std::vector<std::string> tool_start_tags = {"<｜tool_call name=\"", "<｜tool_call name=\""};
     std::string tool_end = "</｜tool_call>";
     
     size_t pos = 0;
-    while ((pos = tools_content.find(tool_start, pos)) != std::string::npos) {
-        size_t name_start = pos + tool_start.length();
+    while ((pos = tools_content.find(tool_start_tags[0], pos)) != std::string::npos) {
+        size_t name_start = pos + tool_start_tags[0].length();
         size_t name_end = tools_content.find("\"", name_start);
         if (name_end == std::string::npos) break;
         
@@ -160,30 +166,153 @@ void executeToolCalls(const std::string& response, const std::string& work_dir, 
         
         std::string params_raw = tools_content.substr(content_start, content_end - content_start);
         
-        nlohmann::json args = nlohmann::json::object();
+        std::cout << "\n🔧 Executing tool: " << tool_name << std::endl;
+        
+        // 尝试解析为 JSON 首先
+        nlohmann::json params_json;
+        bool is_json = false;
         try {
-            args = nlohmann::json::parse(params_raw);
+            params_json = nlohmann::json::parse(params_raw);
+            is_json = true;
         } catch (...) {
-            auto extractParamXml = [](const std::string& xml, const std::string& param_name) -> std::string {
-                std::string open_tag = "<" + param_name + ">";
-                std::string close_tag = "</" + param_name + ">";
-                size_t start = xml.find(open_tag);
-                if (start == std::string::npos) return "";
-                start += open_tag.length();
-                size_t end = xml.find(close_tag, start);
-                if (end == std::string::npos) return "";
-                return xml.substr(start, end - start);
-            };
-
-            for (const auto& param : {"path", "content", "old_text", "new_text", "command"}) {
-                std::string value = extractParamXml(params_raw, param);
-                if (!value.empty()) {
-                    args[param] = value;
+            // 不是有效 JSON，使用 XML 解析回退
+        }
+        
+        auto extractParamJson = [&](const std::string& param_name) -> std::string {
+            if (!is_json || !params_json.contains(param_name)) return "";
+            return params_json[param_name].get<std::string>();
+        };
+        
+        auto extractParamXml = [](const std::string& xml, const std::string& param_name) -> std::string {
+            std::string open_tag = "<" + param_name + ">";
+            std::string close_tag = "</" + param_name + ">";
+            
+            size_t start = xml.find(open_tag);
+            if (start == std::string::npos) return "";
+            
+            start += open_tag.length();
+            size_t end = xml.find(close_tag, start);
+            if (end == std::string::npos) return "";
+            
+            return xml.substr(start, end - start);
+        };
+        
+        auto extractParam = [&](const std::string& param_name) -> std::string {
+            return is_json ? extractParamJson(param_name) : extractParamXml(params_raw, param_name);
+        };
+        
+        if (tool_name == "write_file") {
+            std::string path = extractParam("path");
+            std::string content = extractParam("content");
+            
+            if (path.empty()) {
+                std::cout << "   ❌ Missing 'path' parameter\n";
+                pos = content_end + tool_end.length();
+                continue;
+            }
+            
+            // 如果是相对路径，拼接工作目录
+            if (path[0] != '/') {
+                path = work_dir + "/" + path;
+            }
+            
+            std::cout << "   📝 Writing to: " << path << std::endl;
+            if (writeFile(path, content)) {
+                std::cout << "   ✅ File written successfully\n";
+            } else {
+                std::cout << "   ❌ Failed to write file\n";
+            }
+            
+        } else if (tool_name == "read_file") {
+            std::string path = extractParam("path");
+            if (path.empty()) {
+                std::cout << "   ❌ Missing 'path' parameter\n";
+                pos = content_end + tool_end.length();
+                continue;
+            }
+            if (path[0] != '/') {
+                path = work_dir + "/" + path;
+            }
+            
+            std::cout << "   📖 Reading: " << path << std::endl;
+            std::string content = readFile(path);
+            if (!content.empty()) {
+                std::cout << "   ───────────────────────────────\n";
+                std::cout << content;
+                if (content.back() != '\n') std::cout << "\n";
+                std::cout << "   ───────────────────────────────\n";
+            } else {
+                std::cout << "   ❌ Failed to read file or file not found\n";
+            }
+            
+        } else if (tool_name == "edit_file") {
+            std::string path = extractParam("path");
+            std::string old_text = extractParam("old_text");
+            std::string new_text = extractParam("new_text");
+            
+            if (path.empty()) {
+                std::cout << "   ❌ Missing 'path' parameter\n";
+                pos = content_end + tool_end.length();
+                continue;
+            }
+            if (path[0] != '/') {
+                path = work_dir + "/" + path;
+            }
+            
+            std::cout << "   ✏️  Editing: " << path << std::endl;
+            std::string content = readFile(path);
+            if (!content.empty() && !old_text.empty()) {
+                size_t pos_found = content.find(old_text);
+                if (pos_found != std::string::npos) {
+                    content.replace(pos_found, old_text.length(), new_text);
+                    if (writeFile(path, content)) {
+                        std::cout << "   ✅ File edited successfully\n";
+                    } else {
+                        std::cout << "   ❌ Failed to save edited file\n";
+                    }
+                } else {
+                    std::cout << "   ❌ Old text not found in file\n";
+                }
+            } else {
+                std::cout << "   ❌ Failed to read file or empty old_text\n";
+            }
+            
+        } else if (tool_name == "run_terminal" || tool_name == "terminal" || tool_name == "execute_command") {
+            std::string command = extractParam("command");
+            
+            if (!command.empty()) {
+                std::cout << "   💻 Executing: " << command << std::endl;
+                std::string output = executeCommand(command);
+                if (!output.empty()) {
+                    std::cout << "   ───────────────────────────────\n";
+                    std::cout << output;
+                    if (output.back() != '\n') std::cout << "\n";
+                    std::cout << "   ───────────────────────────────\n";
+                } else {
+                    std::cout << "   (No output)\n";
                 }
             }
+            
+        } else if (tool_name == "list_directory") {
+            std::string path = extractParam("path");
+            if (path.empty()) path = work_dir;
+            if (path[0] != '/') {
+                path = work_dir + "/" + path;
+            }
+            
+            std::cout << "   📁 Listing: " << path << std::endl;
+            std::string cmd = "ls -la \"" + path + "\"";
+            std::string output = executeCommand(cmd);
+            if (!output.empty()) {
+                std::cout << "   ───────────────────────────────\n";
+                std::cout << output;
+                if (output.back() != '\n') std::cout << "\n";
+                std::cout << "   ───────────────────────────────\n";
+            }
+        } else {
+            std::cout << "   ⚠️  Unknown tool: " << tool_name << "\n";
         }
-
-        executeMCPToolCall(mcp_mgr, tool_name, args, work_dir);
+        
         pos = content_end + tool_end.length();
     }
 }
@@ -300,8 +429,6 @@ int main() {
     std::vector<ChatMessage> messages;
     messages.push_back({"system", prompt_mgr.getSystemPrompt()});
     
-    const std::vector<nlohmann::json> tools_schema = mcp_mgr.getToolsSchema();
-
     std::cout << "💬 Chat started. Type 'exit' or 'quit' to end session.\n";
     std::cout << "   Type 'stats' to view token usage.\n\n";
     
@@ -328,44 +455,70 @@ int main() {
         // 添加用户消息
         messages.push_back({"user", user_input});
         
-        // 发送请求
+        // 发送请求，并在模型返回原生工具调用时循环执行并回传结果
         std::string provider_str = ConfigManager::providerToString(provider);
-        ChatResponse response = http_client.sendChatRequest(
-            api_url,
-            api_key,
-            model,
-            messages,
-            provider_str,
-            tools_schema
-        );
+        int tool_rounds = 0;
+        bool request_failed = false;
+        while (true) {
+            ChatResponse response = http_client.sendChatRequest(
+                api_url,
+                api_key,
+                model,
+                messages,
+                provider_str,
+                mcp_mgr.getToolsSchema()
+            );
+            
+            if (!response.success) {
+                ui.showError("API Error: " + response.error_message);
+                messages.pop_back();  // 移除失败的用户消息
+                request_failed = true;
+                break;
+            }
+            
+            // 显示 AI 响应（纯工具调用响应可能没有文本内容）
+            if (!response.content.empty()) {
+                ui.showAIResponse(response.content);
+            }
+            
+            // 记录 token 使用
+            token_tracker.recordTokens(response.input_tokens, response.output_tokens);
+            
+            // 显示本次费用
+            ModelPricing pricing = TokenTracker::getModelPrice(model);
+            double this_cost = (static_cast<double>(response.input_tokens) / 1000000.0) * pricing.input_price_per_1m +
+                              (static_cast<double>(response.output_tokens) / 1000000.0) * pricing.output_price_per_1m;
+            
+            if (this_cost > 0.000001) {
+                std::cout << "   💰 This turn: $" << std::fixed << std::setprecision(6) << this_cost << " USD\n";
+            }
+            
+            // 添加 AI 响应到历史，Anthropic 工具调用需要保留原始 content blocks
+            ChatMessage assistant_message{"assistant", response.content};
+            if (!response.content_blocks.is_null()) {
+                assistant_message.content_blocks = response.content_blocks;
+            }
+            messages.push_back(assistant_message);
+
+            if (response.tool_calls.empty()) {
+                break;
+            }
+
+            nlohmann::json tool_results = executeNativeToolCalls(response.tool_calls, mcp_mgr, work_dir);
+            ChatMessage tool_result_message{"user", ""};
+            tool_result_message.content_blocks = tool_results;
+            messages.push_back(tool_result_message);
+
+            ++tool_rounds;
+            if (tool_rounds >= 8) {
+                ui.showError("Stopped after 8 consecutive tool-call rounds");
+                break;
+            }
+        }
         
-        if (!response.success) {
-            ui.showError("API Error: " + response.error_message);
-            messages.pop_back();  // 移除失败的用户消息
+        if (request_failed) {
             continue;
         }
-        
-        // 显示 AI 响应
-        ui.showAIResponse(response.content);
-        
-        // 解析并执行工具调用 (在添加到历史之前)
-        executeNativeToolCalls(response.tool_calls, work_dir, mcp_mgr);
-        executeToolCalls(response.content, work_dir, mcp_mgr);
-        
-        // 记录 token 使用
-        token_tracker.recordTokens(response.input_tokens, response.output_tokens);
-        
-        // 显示本次费用
-        ModelPricing pricing = TokenTracker::getModelPrice(model);
-        double this_cost = (static_cast<double>(response.input_tokens) / 1000000.0) * pricing.input_price_per_1m +
-                          (static_cast<double>(response.output_tokens) / 1000000.0) * pricing.output_price_per_1m;
-        
-        if (this_cost > 0.000001) {
-            std::cout << "   💰 This turn: $" << std::fixed << std::setprecision(6) << this_cost << " USD\n";
-        }
-        
-        // 添加 AI 响应到历史
-        messages.push_back({"assistant", response.content});
         
         // 显示累计统计
         std::cout << "   📊 Session total: " 
