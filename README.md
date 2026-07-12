@@ -20,12 +20,37 @@
 
 ## 编译方法
 
+### 方法一：使用 CMake（推荐）
+
 ```bash
 cd opencode-cli
 mkdir build && cd build
 cmake ..
 make -j$(nproc)
 ```
+
+### 方法二：直接使用 G++
+
+如果您没有安装 CMake，可以直接使用 G++ 编译：
+
+```bash
+cd opencode-cli
+g++ -std=c++17 -O2 -I./include \
+    src/main.cpp \
+    src/config_manager.cpp \
+    src/token_tracker.cpp \
+    src/git_manager.cpp \
+    src/mcp_manager.cpp \
+    src/http_client.cpp \
+    src/ui.cpp \
+    src/prompt.cpp \
+    -lcurl \
+    -o opencode
+```
+
+**依赖说明：**
+- 需要安装 `libcurl-dev` (Ubuntu/Debian) 或 `libcurl-devel` (CentOS/Fedora)
+- 需要安装 `nlohmann-json` 库，或通过 `-I` 指定头文件路径
 
 ## 使用方法
 
