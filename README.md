@@ -131,3 +131,7 @@ Turtle.AI_AgentCLI/
 ## License
 
 MIT License
+
+## 鸣谢
+
+[Qwen Coder](coder.qwen.ai) & [Codex](https://chatgpt.com/codex/cloud) 提供代码编写支持
