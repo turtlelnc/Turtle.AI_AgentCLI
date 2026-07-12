@@ -66,7 +66,7 @@ g++ -std=c++17 -O2 -I./include \
    - 1: [DeepSeek](https://api.deepseek.com)
    - 2: [OpenAI](https://api.openai.com)
    - 3: [Anthropic](https://api.anthropic.com)
-   - 4: [LlamaCpp](https://github.com/ggml-org/llama.cpp)/[Ollama](https://ollama.com) (本地服务)
+   - 4: [Llama.cpp(GitHub 仓库)](https://github.com/ggml-org/llama.cpp)/[Ollama](https://ollama.com) (本地服务)
 
 2. 输入 API Key (本地模式可跳过)
 
