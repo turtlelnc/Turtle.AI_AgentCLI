@@ -1,4 +1,4 @@
-# OpenCode CLI
+# Turtle.AI AgentCLI
 
 一个使用 C++17 编写的类 Claude Code CLI 的 AI 助手工具，支持多 API 提供商和 LiteLLM 兼容接口。
 
@@ -23,7 +23,7 @@
 ### 方法一：使用 CMake（推荐）
 
 ```bash
-cd opencode-cli
+cd Turtle.AI_AgentCLI
 mkdir build && cd build
 cmake ..
 make -j$(nproc)
@@ -34,7 +34,7 @@ make -j$(nproc)
 如果您没有安装 CMake，可以直接使用 G++ 编译：
 
 ```bash
-cd opencode-cli
+cd Turtle.AI_AgentCLI
 g++ -std=c++17 -O2 -I./include \
     src/main.cpp \
     src/config_manager.cpp \
@@ -45,7 +45,7 @@ g++ -std=c++17 -O2 -I./include \
     src/ui.cpp \
     src/prompt.cpp \
     -lcurl \
-    -o opencode
+    -o Turtle.AI_AgentCLI
 ```
 
 **依赖说明：**
@@ -55,7 +55,7 @@ g++ -std=c++17 -O2 -I./include \
 ## 使用方法
 
 ```bash
-./opencode
+./Turtle.AI_AgentCLI
 ```
 
 ### 配置流程
@@ -99,7 +99,7 @@ g++ -std=c++17 -O2 -I./include \
 ## 项目结构
 
 ```
-opencode-cli/
+Turtle.AI_AgentCLI/
 ├── CMakeLists.txt          # CMake 构建配置
 ├── include/
 │   ├── config_manager.hpp  # 配置管理

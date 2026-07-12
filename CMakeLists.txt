@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(opencode VERSION 1.0.0 LANGUAGES CXX)
+project(Turtle.AI_AgentCLI VERSION 1.0.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -24,10 +24,10 @@ set(SOURCES
 )
 
 # 创建可执行文件
-add_executable(opencode ${SOURCES})
+add_executable(Turtle.AI_AgentCLI ${SOURCES})
 
 # 链接库（仅 CURL，nlohmann_json 为 header-only）
-target_link_libraries(opencode PRIVATE CURL::libcurl)
+target_link_libraries(Turtle.AI_AgentCLI PRIVATE CURL::libcurl)
 
 # 编译选项
-target_compile_options(opencode PRIVATE -Wall -Wextra -O2)
+target_compile_options(Turtle.AI_AgentCLI PRIVATE -Wall -Wextra -O2)
