@@ -9,6 +9,7 @@
 #include <cstdlib>
 #include <array>
 #include <memory>
+#include <cctype>
 
 #include "config_manager.hpp"
 #include "token_tracker.hpp"
@@ -69,58 +70,136 @@ std::string readFile(const std::string& path) {
     return buffer.str();
 }
 
-// 解析并执行工具调用
-void executeToolCalls(const std::string& response, const std::string& work_dir) {
-    // 匹配 DeepSeek/Claude 风格的工具调用：<｜tool_calls｜>...<｜/tool_calls｜>
-    // 支持两种格式：带竖线和不带竖线
-    std::vector<std::string> start_tags = {"<｜tool_calls｜>", "<｜tool_calls>"};
-    std::vector<std::string> end_tags = {"<｜/tool_calls｜>", "<｜/tool_calls>"};
-    
-    size_t start_pos = std::string::npos;
-    std::string start_tag_used, end_tag_used;
-    
-    for (size_t i = 0; i < start_tags.size(); ++i) {
-        size_t pos = response.find(start_tags[i]);
-        if (pos != std::string::npos) {
-            start_pos = pos;
-            start_tag_used = start_tags[i];
-            end_tag_used = end_tags[i];
+namespace {
+
+struct ParsedToolCall {
+    std::string name;
+    std::string body;
+};
+
+std::string trimWhitespace(const std::string& input) {
+    size_t first = 0;
+    while (first < input.size() && std::isspace(static_cast<unsigned char>(input[first]))) {
+        ++first;
+    }
+
+    size_t last = input.size();
+    while (last > first && std::isspace(static_cast<unsigned char>(input[last - 1]))) {
+        --last;
+    }
+
+    return input.substr(first, last - first);
+}
+
+std::string stripMarkdownFence(const std::string& input) {
+    std::string trimmed = trimWhitespace(input);
+    if (trimmed.rfind("```", 0) != 0) {
+        return input;
+    }
+
+    size_t first_line_end = trimmed.find('\n');
+    if (first_line_end == std::string::npos) {
+        return input;
+    }
+
+    size_t closing_fence = trimmed.rfind("```");
+    if (closing_fence == 0 || closing_fence == std::string::npos) {
+        return input;
+    }
+
+    std::string body = trimmed.substr(first_line_end + 1, closing_fence - first_line_end - 1);
+    return trimWhitespace(body);
+}
+
+std::vector<ParsedToolCall> parseToolCalls(const std::string& response) {
+    std::vector<ParsedToolCall> calls;
+
+    // Accept current full-width tags, variants with a trailing full-width bar,
+    // legacy full-width slash placement, and plain ASCII XML-style tags.
+    const std::regex calls_start_re(R"(<(?:｜)?tool_calls(?:｜)?\s*>)");
+    const std::regex calls_end_re(R"((?:</(?:｜)?tool_calls(?:｜)?\s*>|<｜/tool_calls(?:｜)?\s*>))");
+
+    std::smatch start_match;
+    if (!std::regex_search(response, start_match, calls_start_re)) {
+        return calls;
+    }
+
+    const size_t content_start = static_cast<size_t>(start_match.position() + start_match.length());
+    std::string after_start = response.substr(content_start);
+    std::smatch end_match;
+    if (!std::regex_search(after_start, end_match, calls_end_re)) {
+        return calls;
+    }
+
+    std::string tools_content = after_start.substr(0, static_cast<size_t>(end_match.position()));
+
+    const std::regex tool_start_re(R"(<(?:｜)?tool_call(?:｜)?\s+[^>]*name\s*=\s*(['"])(.*?)\1[^>]*>)");
+    const std::regex tool_end_re(R"((?:</(?:｜)?tool_call(?:｜)?\s*>|<｜/tool_call(?:｜)?\s*>))");
+
+    std::string::const_iterator search_begin = tools_content.cbegin();
+    while (search_begin != tools_content.cend()) {
+        std::smatch tool_start_match;
+        if (!std::regex_search(search_begin, tools_content.cend(), tool_start_match, tool_start_re)) {
             break;
         }
+
+        const auto body_begin = tool_start_match.suffix().first;
+        std::smatch tool_end_match;
+        if (!std::regex_search(body_begin, tools_content.cend(), tool_end_match, tool_end_re)) {
+            break;
+        }
+
+        calls.push_back({tool_start_match[2].str(), stripMarkdownFence(std::string(body_begin, tool_end_match.prefix().second))});
+        search_begin = tool_end_match.suffix().first;
     }
-    
-    if (start_pos == std::string::npos) {
-        return;  // 没有工具调用
+
+    return calls;
+}
+
+bool runToolCallParserChecks() {
+    const std::vector<std::pair<std::string, ParsedToolCall>> checks = {
+        {
+            "<｜tool_calls｜><｜tool_call name=\"run_terminal\">{\"command\":\"echo current\"}</｜tool_call></｜tool_calls｜>",
+            {"run_terminal", "{\"command\":\"echo current\"}"}
+        },
+        {
+            "<tool_calls><tool_call name=\"read_file\">{\"path\":\"README.md\"}</tool_call></tool_calls>",
+            {"read_file", "{\"path\":\"README.md\"}"}
+        },
+        {
+            "<tool_calls><tool_call   name='terminal'>{\"command\":\"pwd\"}</tool_call></tool_calls>",
+            {"terminal", "{\"command\":\"pwd\"}"}
+        },
+        {
+            "<tool_calls><tool_call name=\"execute_command\">```json\n{\"command\":\"echo fenced\"}\n```</tool_call></tool_calls>",
+            {"execute_command", "{\"command\":\"echo fenced\"}"}
+        }
+    };
+
+    for (const auto& check : checks) {
+        auto parsed = parseToolCalls(check.first);
+        if (parsed.size() != 1 || parsed[0].name != check.second.name || parsed[0].body != check.second.body) {
+            std::cerr << "Tool call parser check failed for input: " << check.first << std::endl;
+            return false;
+        }
     }
-    
-    size_t end_pos = response.find(end_tag_used, start_pos);
-    if (end_pos == std::string::npos) {
-        return;  // 格式不完整
+
+    std::cout << "Tool call parser checks passed\n";
+    return true;
+}
+
+} // namespace
+
+// 解析并执行工具调用
+void executeToolCalls(const std::string& response, const std::string& work_dir) {
+    std::vector<ParsedToolCall> tool_calls = parseToolCalls(response);
+    if (tool_calls.empty()) {
+        return;
     }
-    
-    std::string tools_content = response.substr(start_pos + start_tag_used.length(), 
-                                                 end_pos - start_pos - start_tag_used.length());
-    
-    // 提取每个工具调用 <｜tool_call name="...">...</｜tool_call>
-    std::vector<std::string> tool_start_tags = {"<｜tool_call name=\"", "<｜tool_call name=\""};
-    std::string tool_end = "</｜tool_call>";
-    
-    size_t pos = 0;
-    while ((pos = tools_content.find(tool_start_tags[0], pos)) != std::string::npos) {
-        size_t name_start = pos + tool_start_tags[0].length();
-        size_t name_end = tools_content.find("\"", name_start);
-        if (name_end == std::string::npos) break;
-        
-        std::string tool_name = tools_content.substr(name_start, name_end - name_start);
-        
-        size_t content_start = tools_content.find(">", name_end);
-        if (content_start == std::string::npos) break;
-        content_start += 1;
-        
-        size_t content_end = tools_content.find(tool_end, content_start);
-        if (content_end == std::string::npos) break;
-        
-        std::string params_raw = tools_content.substr(content_start, content_end - content_start);
+
+    for (const auto& tool_call : tool_calls) {
+        std::string tool_name = tool_call.name;
+        std::string params_raw = tool_call.body;
         
         std::cout << "\n🔧 Executing tool: " << tool_name << std::endl;
         
@@ -163,7 +242,6 @@ void executeToolCalls(const std::string& response, const std::string& work_dir) 
             
             if (path.empty()) {
                 std::cout << "   ❌ Missing 'path' parameter\n";
-                pos = content_end + tool_end.length();
                 continue;
             }
             
@@ -183,7 +261,6 @@ void executeToolCalls(const std::string& response, const std::string& work_dir) 
             std::string path = extractParam("path");
             if (path.empty()) {
                 std::cout << "   ❌ Missing 'path' parameter\n";
-                pos = content_end + tool_end.length();
                 continue;
             }
             if (path[0] != '/') {
@@ -208,7 +285,6 @@ void executeToolCalls(const std::string& response, const std::string& work_dir) 
             
             if (path.empty()) {
                 std::cout << "   ❌ Missing 'path' parameter\n";
-                pos = content_end + tool_end.length();
                 continue;
             }
             if (path[0] != '/') {
@@ -268,12 +344,14 @@ void executeToolCalls(const std::string& response, const std::string& work_dir) 
         } else {
             std::cout << "   ⚠️  Unknown tool: " << tool_name << "\n";
         }
-        
-        pos = content_end + tool_end.length();
     }
 }
 
-int main() {
+
+int main(int argc, char* argv[]) {
+    if (argc > 1 && std::string(argv[1]) == "--self-test-tool-parser") {
+        return runToolCallParserChecks() ? 0 : 1;
+    }
     // 设置信号处理
     std::signal(SIGINT, signalHandler);
     
