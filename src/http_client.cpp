@@ -14,7 +14,7 @@ HttpClient::HttpClient() {
     curl_global_init(CURL_GLOBAL_ALL);
 }
 
-std::string HttpClient::performCurlRequest(const std::string& url, const std::string& data, const std::string& api_key) {
+std::string HttpClient::performCurlRequest(const std::string& url, const std::string& data, const std::string& api_key, const std::string& provider_type) {
     CURL* curl = curl_easy_init();
     if (!curl) {
         return "{\"error\": \"Failed to initialize CURL\"}";
@@ -24,8 +24,14 @@ std::string HttpClient::performCurlRequest(const std::string& url, const std::st
     headers = curl_slist_append(headers, "Content-Type: application/json");
     
     if (!api_key.empty()) {
-        std::string auth_header = "Authorization: Bearer " + api_key;
-        headers = curl_slist_append(headers, auth_header.c_str());
+        if (provider_type == "Anthropic") {
+            std::string api_key_header = "x-api-key: " + api_key;
+            headers = curl_slist_append(headers, api_key_header.c_str());
+            headers = curl_slist_append(headers, "anthropic-version: 2023-06-01");
+        } else {
+            std::string auth_header = "Authorization: Bearer " + api_key;
+            headers = curl_slist_append(headers, auth_header.c_str());
+        }
     }
     
     curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
@@ -128,7 +134,7 @@ ChatResponse HttpClient::sendChatRequest(
     response.output_tokens = 0;
     
     nlohmann::json body = buildRequestBody(model, messages, provider_type);
-    std::string result = performCurlRequest(url, body.dump(), api_key);
+    std::string result = performCurlRequest(url, body.dump(), api_key, provider_type);
     
     try {
         nlohmann::json json_result = nlohmann::json::parse(result);
