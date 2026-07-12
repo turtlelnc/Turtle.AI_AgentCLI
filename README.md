@@ -20,6 +20,8 @@
 
 ## 编译方法
 
+先下载 [`main` 的 zip 包 ](https://github.com/turtlelnc/Turtle.AI_AgentCLI/archive/refs/heads/main.zip)并解压
+
 ### 方法一：使用 CMake（推荐）
 
 ```bash
@@ -61,10 +63,10 @@ g++ -std=c++17 -O2 -I./include \
 ### 配置流程
 
 1. 选择 API 提供商 (1-4):
-   - 1: DeepSeek (https://api.deepseek.com)
-   - 2: OpenAI (https://api.openai.com)
-   - 3: Anthropic (https://api.anthropic.com)
-   - 4: LlamaCpp/Ollama (本地服务)
+   - 1: [DeepSeek](https://api.deepseek.com)
+   - 2: [OpenAI](https://api.openai.com)
+   - 3: [Anthropic](https://api.anthropic.com)
+   - 4: [LlamaCpp](https://github.com/ggml-org/llama.cpp)/[Ollama](https://ollama.com) (本地服务)
 
 2. 输入 API Key (本地模式可跳过)
 
