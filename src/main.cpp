@@ -461,32 +461,47 @@ int main(int argc, char* argv[]) {
     std::cout << "💬 Chat started. Type 'exit' or 'quit' to end session.\n";
     std::cout << "   Type 'stats' to view token usage.\n\n";
     
+    // 标志位：是否需要用户输入（首次进入循环或工具调用完成后）
+    bool need_user_input = true;
+    std::string pending_user_input;
+    
     while (!g_interrupted) {
-        std::string user_input = ui.getInput("You");
+        std::string user_input;
         
-        if (user_input == "exit" || user_input == "quit") {
-            break;
+        // 获取用户输入（仅在需要时）
+        if (need_user_input) {
+            user_input = ui.getInput("You");
+            
+            if (user_input == "exit" || user_input == "quit") {
+                break;
+            }
+            
+            if (user_input == "stats") {
+                ui.showTokenStats(
+                    token_tracker.getTotalInputTokens(),
+                    token_tracker.getTotalOutputTokens(),
+                    token_tracker.getTotalCostUSD()
+                );
+                continue;
+            }
+            
+            if (user_input.empty()) {
+                continue;
+            }
+            
+            // 添加用户消息
+            messages.push_back({"user", user_input});
+            pending_user_input.clear();
+        } else {
+            // 工具调用完成后，自动继续，不需要用户输入
+            need_user_input = true;  // 下次循环需要用户输入
+            continue;  // 直接进入下一轮请求
         }
         
-        if (user_input == "stats") {
-            ui.showTokenStats(
-                token_tracker.getTotalInputTokens(),
-                token_tracker.getTotalOutputTokens(),
-                token_tracker.getTotalCostUSD()
-            );
-            continue;
-        }
-        
-        if (user_input.empty()) {
-            continue;
-        }
-        
-        // 添加用户消息
-        messages.push_back({"user", user_input});
-        
-        // 获取工具 schema 并发送请求
+        // 发送请求
         std::vector<nlohmann::json> tools_schema = mcp_mgr.getToolsSchema();
         std::string provider_str = ConfigManager::providerToString(provider);
+        
         ChatResponse response = http_client.sendChatRequest(
             api_url,
             api_key,
@@ -608,7 +623,8 @@ int main(int argc, char* argv[]) {
                      << " tokens, $" << std::fixed << std::setprecision(6)
                      << token_tracker.getTotalCostUSD() << " USD\n\n";
             
-            // 继续循环，让模型基于工具结果生成下一轮响应
+            // 标记为不需要用户输入，自动继续
+            need_user_input = false;
             continue;
         }
         

@@ -31,13 +31,25 @@ struct ChatResponse {
     bool success;
     std::string error_message;
     nlohmann::json content_blocks;  // For Anthropic response parsing
+    bool has_tool_calls = false;    // 标记是否有工具调用需要执行
 };
 
 class HttpClient {
 public:
     HttpClient();
     
-    // 发送聊天请求 (支持多提供商)
+    // 发送聊天请求 (支持多提供商) - 流式版本
+    ChatResponse sendChatRequestStreaming(
+        const std::string& url,
+        const std::string& api_key,
+        const std::string& model,
+        const std::vector<ChatMessage>& messages,
+        const std::string& provider_type,
+        const std::vector<nlohmann::json>& tools = {},
+        std::function<void(const std::string&)> onChunk = nullptr
+    );
+    
+    // 发送聊天请求 (支持多提供商) - 非流式版本 (保留向后兼容)
     ChatResponse sendChatRequest(
         const std::string& url,
         const std::string& api_key,
@@ -52,11 +64,13 @@ public:
 
 private:
     std::string performCurlRequest(const std::string& url, const std::string& data, const std::string& api_key, const std::string& provider_type);
+    std::string performCurlRequestStreaming(const std::string& url, const std::string& data, const std::string& api_key, const std::string& provider_type, std::function<void(const std::string&)> onChunk);
     nlohmann::json buildRequestBody(
         const std::string& model,
         const std::vector<ChatMessage>& messages,
         const std::string& provider_type,
-        const std::vector<nlohmann::json>& tools
+        const std::vector<nlohmann::json>& tools,
+        bool stream = false
     );
 };
 

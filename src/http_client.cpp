@@ -1,12 +1,46 @@
 #include "http_client.hpp"
 #include <curl/curl.h>
 #include <iostream>
+#include <functional>
 
 namespace opencode {
 
 static size_t WriteCallback(void* contents, size_t size, size_t nmemb, std::string* userp) {
     size_t total_size = size * nmemb;
     userp->append(static_cast<char*>(contents), total_size);
+    return total_size;
+}
+
+// 流式写入回调结构体
+struct StreamCallbackData {
+    std::function<void(const std::string&)> onChunk;
+    std::string accumulated_content;
+};
+
+static size_t StreamWriteCallback(void* contents, size_t size, size_t nmemb, void* userp) {
+    size_t total_size = size * nmemb;
+    StreamCallbackData* cb_data = static_cast<StreamCallbackData*>(userp);
+    
+    std::string chunk(static_cast<char*>(contents), total_size);
+    cb_data->accumulated_content += chunk;
+    
+    // 处理 SSE 格式 (data: {...}\n\n)
+    size_t pos = 0;
+    while ((pos = cb_data->accumulated_content.find("\n\n")) != std::string::npos) {
+        std::string line = cb_data->accumulated_content.substr(0, pos);
+        cb_data->accumulated_content.erase(0, pos + 2);
+        
+        if (line.rfind("data: ", 0) == 0) {
+            std::string data = line.substr(6);
+            if (data == "[DONE]") {
+                break;
+            }
+            if (cb_data->onChunk) {
+                cb_data->onChunk(data);
+            }
+        }
+    }
+    
     return total_size;
 }
 
@@ -62,7 +96,56 @@ std::string HttpClient::performCurlRequest(const std::string& url, const std::st
     return response_data;
 }
 
-nlohmann::json HttpClient::buildRequestBody(const std::string& model, const std::vector<ChatMessage>& messages, const std::string& provider_type, const std::vector<nlohmann::json>& tools) {
+std::string HttpClient::performCurlRequestStreaming(const std::string& url, const std::string& data, const std::string& api_key, const std::string& provider_type, std::function<void(const std::string&)> onChunk) {
+    CURL* curl = curl_easy_init();
+    if (!curl) {
+        return "{\"error\": \"Failed to initialize CURL\"}";
+    }
+    
+    struct curl_slist* headers = nullptr;
+    headers = curl_slist_append(headers, "Content-Type: application/json");
+    
+    if (!api_key.empty()) {
+        if (provider_type == "Anthropic") {
+            std::string api_key_header = "x-api-key: " + api_key;
+            headers = curl_slist_append(headers, api_key_header.c_str());
+            headers = curl_slist_append(headers, "anthropic-version: 2023-06-01");
+        } else {
+            std::string auth_header = "Authorization: Bearer " + api_key;
+            headers = curl_slist_append(headers, auth_header.c_str());
+        }
+    }
+    
+    curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+    curl_easy_setopt(curl, CURLOPT_POSTFIELDS, data.c_str());
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, StreamWriteCallback);
+    
+    StreamCallbackData cb_data;
+    cb_data.onChunk = onChunk;
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &cb_data);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 120L);
+    
+    // 禁用 SSL 验证 (仅用于本地测试，生产环境应启用)
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
+    
+    CURLcode res = curl_easy_perform(curl);
+    
+    long http_code = 0;
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
+    
+    curl_slist_free_all(headers);
+    curl_easy_cleanup(curl);
+    
+    if (res != CURLE_OK) {
+        return "{\"error\": \"" + std::string(curl_easy_strerror(res)) + "\"}";
+    }
+    
+    return cb_data.accumulated_content;
+}
+
+nlohmann::json HttpClient::buildRequestBody(const std::string& model, const std::vector<ChatMessage>& messages, const std::string& provider_type, const std::vector<nlohmann::json>& tools, bool stream) {
     nlohmann::json body;
     
     // DeepSeek/OpenAI/兼容格式
@@ -82,7 +165,7 @@ nlohmann::json HttpClient::buildRequestBody(const std::string& model, const std:
             body["messages"].push_back(message);
         }
         
-        body["stream"] = false;
+        body["stream"] = stream;
         body["temperature"] = 0.7;
         body["max_tokens"] = 4096;
         if (!tools.empty()) {
@@ -139,7 +222,7 @@ nlohmann::json HttpClient::buildRequestBody(const std::string& model, const std:
             });
         }
         
-        body["stream"] = false;
+        body["stream"] = stream;
     }
     
     return body;
@@ -153,13 +236,32 @@ ChatResponse HttpClient::sendChatRequest(
     const std::string& provider_type,
     const std::vector<nlohmann::json>& tools
 ) {
+    return sendChatRequestStreaming(url, api_key, model, messages, provider_type, tools, nullptr);
+}
+
+ChatResponse HttpClient::sendChatRequestStreaming(
+    const std::string& url,
+    const std::string& api_key,
+    const std::string& model,
+    const std::vector<ChatMessage>& messages,
+    const std::string& provider_type,
+    const std::vector<nlohmann::json>& tools,
+    std::function<void(const std::string&)> onChunk
+) {
     ChatResponse response;
     response.success = false;
     response.input_tokens = 0;
     response.output_tokens = 0;
     
-    nlohmann::json body = buildRequestBody(model, messages, provider_type, tools);
-    std::string result = performCurlRequest(url, body.dump(), api_key, provider_type);
+    bool stream = (onChunk != nullptr);
+    nlohmann::json body = buildRequestBody(model, messages, provider_type, tools, stream);
+    
+    std::string result;
+    if (stream) {
+        result = performCurlRequestStreaming(url, body.dump(), api_key, provider_type, onChunk);
+    } else {
+        result = performCurlRequest(url, body.dump(), api_key, provider_type);
+    }
     
     try {
         nlohmann::json json_result = nlohmann::json::parse(result);
@@ -240,6 +342,7 @@ ChatResponse HttpClient::sendChatRequest(
             }
         }
         
+        response.has_tool_calls = !response.tool_calls.empty();
         response.success = !response.content.empty() || !response.tool_calls.empty();
         
     } catch (const std::exception& e) {
