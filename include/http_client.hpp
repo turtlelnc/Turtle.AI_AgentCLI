@@ -7,19 +7,20 @@
 
 namespace opencode {
 
-struct ChatMessage {
-    std::string role;  // "system", "user", "assistant", "tool"
-    std::string content;
-    nlohmann::json content_blocks = nullptr;  // For Anthropic multi-block content
-    std::string tool_call_id;  // For tool messages (OpenAI format)
-};
-
 struct ToolCall {
     std::string id;
     std::string type;
     std::string name;
     nlohmann::json arguments;  // OpenAI format: function.arguments
     nlohmann::json input;      // Anthropic format: tool_use.input
+};
+
+struct ChatMessage {
+    std::string role;  // "system", "user", "assistant", "tool"
+    std::string content;
+    nlohmann::json content_blocks = nullptr;  // For Anthropic multi-block content
+    std::string tool_call_id;  // For tool messages (OpenAI format)
+    std::vector<ToolCall> tool_calls;  // For assistant messages with tool calls
 };
 
 struct ChatResponse {

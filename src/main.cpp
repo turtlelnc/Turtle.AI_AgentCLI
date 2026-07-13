@@ -507,6 +507,13 @@ int main(int argc, char* argv[]) {
         
         // 执行原生 tool_calls (OpenAI/DeepSeek/Anthropic 格式)
         if (!response.tool_calls.empty()) {
+            // 首先保存包含 tool_calls 的助手消息到历史记录
+            ChatMessage assistant_msg;
+            assistant_msg.role = "assistant";
+            assistant_msg.content = response.content;
+            assistant_msg.tool_calls = response.tool_calls;
+            messages.push_back(assistant_msg);
+            
             std::cout << "\n🔧 Executing " << response.tool_calls.size() << " native tool call(s)..." << std::endl;
             
             // 存储工具执行结果
@@ -608,6 +615,12 @@ int main(int argc, char* argv[]) {
         // 解析并执行 XML 格式的工具调用 (回退方案)
         std::vector<ParsedToolCall> xml_tool_calls = parseToolCalls(response.content);
         if (!xml_tool_calls.empty()) {
+            // 首先保存包含 XML 工具调用的助手消息到历史记录
+            ChatMessage assistant_msg_xml;
+            assistant_msg_xml.role = "assistant";
+            assistant_msg_xml.content = response.content;
+            messages.push_back(assistant_msg_xml);
+            
             // 执行 XML 工具调用并收集结果
             std::vector<std::string> tool_outputs;
             for (const auto& tool_call : xml_tool_calls) {
@@ -615,7 +628,7 @@ int main(int argc, char* argv[]) {
                 tool_outputs.push_back(output);
             }
             
-            // 将工具结果添加回消息历史
+            // 将工具结果添加回消息历史 (作为 user 消息，因为 XML 回退不是标准协议)
             std::string combined_output;
             for (size_t i = 0; i < xml_tool_calls.size(); i++) {
                 if (i > 0) combined_output += "\n\n";
@@ -623,7 +636,7 @@ int main(int argc, char* argv[]) {
             }
             
             ChatMessage tool_result_msg;
-            tool_result_msg.role = "tool";
+            tool_result_msg.role = "user";
             tool_result_msg.content = combined_output;
             messages.push_back(tool_result_msg);
             
