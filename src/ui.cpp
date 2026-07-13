@@ -193,7 +193,6 @@ void UI::showHistory(const std::vector<std::pair<std::string, std::string>>& his
     }
 }
 
-} // namespace opencode
 
 std::string UI::showWorkspaceSelection(ConfigManager& config_mgr) {
     auto recent = config_mgr.getRecentWorkspaces(15, 30);
