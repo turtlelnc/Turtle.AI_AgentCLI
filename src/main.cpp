@@ -23,9 +23,9 @@ using namespace opencode;
 
 std::atomic<bool> g_interrupted(false);
 
-void signalHandler(int signum) {
+void signalHandler(int /* signum */) {
     g_interrupted = true;
-    std::cout << "\n\n⚠  Interrupted by user. Type 'exit' to quit.\n";
+    std::cout << "\n⚠  Interrupted by user. Type 'exit' to quit.\n";
 }
 
 // 执行终端命令并返回输出
