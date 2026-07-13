@@ -159,20 +159,20 @@ std::vector<ParsedToolCall> parseToolCalls(const std::string& response) {
 bool runToolCallParserChecks() {
     const std::vector<std::pair<std::string, ParsedToolCall>> checks = {
         {
-            "<｜tool_calls｜><｜tool_call name="run_terminal">{"command":"echo current"}</｜tool_call></｜tool_calls｜>",
-            {"run_terminal", "{"command":"echo current"}"}
+            "<｜tool_calls｜><｜tool_call name=\"run_terminal\">{\"command\":\"echo current\"}</｜tool_call></｜tool_calls｜>",
+            {"run_terminal", "{\"command\":\"echo current\"}"}
         },
         {
-            "<tool_calls><tool_call name="read_file">{"path":"README.md"}</tool_call></tool_calls>",
-            {"read_file", "{"path":"README.md"}"}
+            "<tool_calls><tool_call name=\"read_file\">{\"path\":\"README.md\"}</tool_call></tool_calls>",
+            {"read_file", "{\"path\":\"README.md\"}"}
         },
         {
-            "<tool_calls><tool_call   name='terminal'>{"command":"pwd"}</tool_call></tool_calls>",
-            {"terminal", "{"command":"pwd"}"}
+            "<tool_calls><tool_call   name='terminal'>{\"command\":\"pwd\"}</tool_call></tool_calls>",
+            {"terminal", "{\"command\":\"pwd\"}"}
         },
         {
-            "<tool_calls><tool_call name="execute_command">```json\n{"command":"echo fenced"}\n```</tool_call></tool_calls>",
-            {"execute_command", "{"command":"echo fenced"}"}
+            "<tool_calls><tool_call name=\"execute_command\">```json\n{\"command\":\"echo fenced\"}\n```</tool_call></tool_calls>",
+            {"execute_command", "{\"command\":\"echo fenced\"}"}
         }
     };
 
