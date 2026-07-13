@@ -581,7 +581,7 @@ int main(int argc, char* argv[]) {
                 tool_result_msg.content_blocks = content_blocks;
                 messages.push_back(tool_result_msg);
             } else {
-                // OpenAI/DeepSeek 格式：使用 tool role
+                // OpenAI/DeepSeek 格式：使用 tool role，每条工具结果单独一条消息
                 for (size_t i = 0; i < response.tool_calls.size(); i++) {
                     const auto& tc = response.tool_calls[i];
                     const auto& result = tool_results[i];
@@ -600,7 +600,7 @@ int main(int argc, char* argv[]) {
                     ChatMessage tool_msg;
                     tool_msg.role = "tool";
                     tool_msg.content = result_content;
-                    tool_msg.tool_call_id = tc.id;  // 添加 tool_call_id
+                    tool_msg.tool_call_id = tc.id;  // 必须与 assistant 消息中的 tool_call_id 匹配
                     messages.push_back(tool_msg);
                 }
             }
