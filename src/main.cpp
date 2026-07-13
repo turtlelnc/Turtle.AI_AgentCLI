@@ -190,6 +190,138 @@ bool runToolCallParserChecks() {
 
 } // namespace
 
+// 执行单个工具调用并返回结果
+std::string executeSingleToolCall(const std::string& tool_name, const std::string& params_raw, const std::string& work_dir) {
+    // 尝试解析为 JSON 首先
+    nlohmann::json params_json;
+    bool is_json = false;
+    try {
+        params_json = nlohmann::json::parse(params_raw);
+        is_json = true;
+    } catch (...) {
+        // 不是有效 JSON，使用 XML 解析回退
+    }
+    
+    auto extractParamJson = [&](const std::string& param_name) -> std::string {
+        if (!is_json || !params_json.contains(param_name)) return "";
+        return params_json[param_name].get<std::string>();
+    };
+    
+    auto extractParamXml = [](const std::string& xml, const std::string& param_name) -> std::string {
+        std::string open_tag = "<" + param_name + ">";
+        std::string close_tag = "</" + param_name + ">";
+        
+        size_t start = xml.find(open_tag);
+        if (start == std::string::npos) return "";
+        
+        start += open_tag.length();
+        size_t end = xml.find(close_tag, start);
+        if (end == std::string::npos) return "";
+        
+        return xml.substr(start, end - start);
+    };
+    
+    auto extractParam = [&](const std::string& param_name) -> std::string {
+        return is_json ? extractParamJson(param_name) : extractParamXml(params_raw, param_name);
+    };
+    
+    if (tool_name == "write_file") {
+        std::string path = extractParam("path");
+        std::string content = extractParam("content");
+        
+        if (path.empty()) {
+            return "Error: Missing 'path' parameter";
+        }
+        
+        // 如果是相对路径，拼接工作目录
+        if (path[0] != '/') {
+            path = work_dir + "/" + path;
+        }
+        
+        if (writeFile(path, content)) {
+            return "Success: File written to " + path;
+        } else {
+            return "Error: Failed to write file";
+        }
+        
+    } else if (tool_name == "read_file") {
+        std::string path = extractParam("path");
+        if (path.empty()) {
+            return "Error: Missing 'path' parameter";
+        }
+        if (path[0] != '/') {
+            path = work_dir + "/" + path;
+        }
+        
+        std::string content = readFile(path);
+        if (!content.empty()) {
+            return "Success:\n" + content;
+        } else {
+            return "Error: Failed to read file or file not found";
+        }
+        
+    } else if (tool_name == "edit_file") {
+        std::string path = extractParam("path");
+        std::string old_text = extractParam("old_text");
+        std::string new_text = extractParam("new_text");
+        
+        if (path.empty()) {
+            return "Error: Missing 'path' parameter";
+        }
+        if (path[0] != '/') {
+            path = work_dir + "/" + path;
+        }
+        
+        std::string content = readFile(path);
+        if (!content.empty() && !old_text.empty()) {
+            size_t pos_found = content.find(old_text);
+            if (pos_found != std::string::npos) {
+                content.replace(pos_found, old_text.length(), new_text);
+                if (writeFile(path, content)) {
+                    return "Success: File edited";
+                } else {
+                    return "Error: Failed to save edited file";
+                }
+            } else {
+                return "Error: Old text not found in file";
+            }
+        } else {
+            return "Error: Failed to read file or empty old_text";
+        }
+        
+    } else if (tool_name == "run_terminal" || tool_name == "terminal" || tool_name == "execute_command") {
+        std::string command = extractParam("command");
+        
+        if (!command.empty()) {
+            std::string output = executeCommand(command);
+            if (!output.empty()) {
+                return "Command output:\n" + output;
+            } else {
+                return "Command executed (no output)";
+            }
+        } else {
+            return "Error: Missing 'command' parameter";
+        }
+        
+    } else if (tool_name == "list_directory") {
+        std::string path = extractParam("path");
+        if (path.empty()) path = work_dir;
+        if (path[0] != '/') {
+            path = work_dir + "/" + path;
+        }
+        
+        std::string cmd = "ls -la \"" + path + "\"";
+        std::string output = executeCommand(cmd);
+        if (!output.empty()) {
+            return "Directory listing:\n" + output;
+        } else {
+            return "Error: Failed to list directory";
+        }
+    } else {
+        return "Error: Unknown tool: " + tool_name;
+    }
+}
+
 // 解析并执行工具调用
 void executeToolCalls(const std::string& response, const std::string& work_dir) {
     std::vector<ParsedToolCall> tool_calls = parseToolCalls(response);
@@ -203,147 +335,8 @@ void executeToolCalls(const std::string& response, const std::string& work_dir) 
         
         std::cout << "\n🔧 Executing tool: " << tool_name << std::endl;
         
-        // 尝试解析为 JSON 首先
-        nlohmann::json params_json;
-        bool is_json = false;
-        try {
-            params_json = nlohmann::json::parse(params_raw);
-            is_json = true;
-        } catch (...) {
-            // 不是有效 JSON，使用 XML 解析回退
-        }
-        
-        auto extractParamJson = [&](const std::string& param_name) -> std::string {
-            if (!is_json || !params_json.contains(param_name)) return "";
-            return params_json[param_name].get<std::string>();
-        };
-        
-        auto extractParamXml = [](const std::string& xml, const std::string& param_name) -> std::string {
-            std::string open_tag = "<" + param_name + ">";
-            std::string close_tag = "</" + param_name + ">";
-            
-            size_t start = xml.find(open_tag);
-            if (start == std::string::npos) return "";
-            
-            start += open_tag.length();
-            size_t end = xml.find(close_tag, start);
-            if (end == std::string::npos) return "";
-            
-            return xml.substr(start, end - start);
-        };
-        
-        auto extractParam = [&](const std::string& param_name) -> std::string {
-            return is_json ? extractParamJson(param_name) : extractParamXml(params_raw, param_name);
-        };
-        
-        if (tool_name == "write_file") {
-            std::string path = extractParam("path");
-            std::string content = extractParam("content");
-            
-            if (path.empty()) {
-                std::cout << "   ❌ Missing 'path' parameter\n";
-                continue;
-            }
-            
-            // 如果是相对路径，拼接工作目录
-            if (path[0] != '/') {
-                path = work_dir + "/" + path;
-            }
-            
-            std::cout << "   📝 Writing to: " << path << std::endl;
-            if (writeFile(path, content)) {
-                std::cout << "   ✅ File written successfully\n";
-            } else {
-                std::cout << "   ❌ Failed to write file\n";
-            }
-            
-        } else if (tool_name == "read_file") {
-            std::string path = extractParam("path");
-            if (path.empty()) {
-                std::cout << "   ❌ Missing 'path' parameter\n";
-                continue;
-            }
-            if (path[0] != '/') {
-                path = work_dir + "/" + path;
-            }
-            
-            std::cout << "   📖 Reading: " << path << std::endl;
-            std::string content = readFile(path);
-            if (!content.empty()) {
-                std::cout << "   ───────────────────────────────\n";
-                std::cout << content;
-                if (content.back() != '\n') std::cout << "\n";
-                std::cout << "   ───────────────────────────────\n";
-            } else {
-                std::cout << "   ❌ Failed to read file or file not found\n";
-            }
-            
-        } else if (tool_name == "edit_file") {
-            std::string path = extractParam("path");
-            std::string old_text = extractParam("old_text");
-            std::string new_text = extractParam("new_text");
-            
-            if (path.empty()) {
-                std::cout << "   ❌ Missing 'path' parameter\n";
-                continue;
-            }
-            if (path[0] != '/') {
-                path = work_dir + "/" + path;
-            }
-            
-            std::cout << "   ✏️  Editing: " << path << std::endl;
-            std::string content = readFile(path);
-            if (!content.empty() && !old_text.empty()) {
-                size_t pos_found = content.find(old_text);
-                if (pos_found != std::string::npos) {
-                    content.replace(pos_found, old_text.length(), new_text);
-                    if (writeFile(path, content)) {
-                        std::cout << "   ✅ File edited successfully\n";
-                    } else {
-                        std::cout << "   ❌ Failed to save edited file\n";
-                    }
-                } else {
-                    std::cout << "   ❌ Old text not found in file\n";
-                }
-            } else {
-                std::cout << "   ❌ Failed to read file or empty old_text\n";
-            }
-            
-        } else if (tool_name == "run_terminal" || tool_name == "terminal" || tool_name == "execute_command") {
-            std::string command = extractParam("command");
-            
-            if (!command.empty()) {
-                std::cout << "   💻 Executing: " << command << std::endl;
-                std::string output = executeCommand(command);
-                if (!output.empty()) {
-                    std::cout << "   ───────────────────────────────\n";
-                    std::cout << output;
-                    if (output.back() != '\n') std::cout << "\n";
-                    std::cout << "   ───────────────────────────────\n";
-                } else {
-                    std::cout << "   (No output)\n";
-                }
-            }
-            
-        } else if (tool_name == "list_directory") {
-            std::string path = extractParam("path");
-            if (path.empty()) path = work_dir;
-            if (path[0] != '/') {
-                path = work_dir + "/" + path;
-            }
-            
-            std::cout << "   📁 Listing: " << path << std::endl;
-            std::string cmd = "ls -la "" + path + """;
-            std::string output = executeCommand(cmd);
-            if (!output.empty()) {
-                std::cout << "   ───────────────────────────────\n";
-                std::cout << output;
-                if (output.back() != '\n') std::cout << "\n";
-                std::cout << "   ───────────────────────────────\n";
-            }
-        } else {
-            std::cout << "   ⚠️  Unknown tool: " << tool_name << "\n";
-        }
+        std::string result = executeSingleToolCall(tool_name, params_raw, work_dir);
+        std::cout << "   " << result << "\n";
     }
 }
 
@@ -613,8 +606,50 @@ int main(int argc, char* argv[]) {
         }
         
         // 解析并执行 XML 格式的工具调用 (回退方案)
-        executeToolCalls(response.content, work_dir);
+        std::vector<ParsedToolCall> xml_tool_calls = parseToolCalls(response.content);
+        if (!xml_tool_calls.empty()) {
+            // 执行 XML 工具调用并收集结果
+            std::vector<std::string> tool_outputs;
+            for (const auto& tool_call : xml_tool_calls) {
+                std::string output = executeSingleToolCall(tool_call.name, tool_call.body, work_dir);
+                tool_outputs.push_back(output);
+            }
+            
+            // 将工具结果添加回消息历史
+            std::string combined_output;
+            for (size_t i = 0; i < xml_tool_calls.size(); i++) {
+                if (i > 0) combined_output += "\n\n";
+                combined_output += "Tool: " + xml_tool_calls[i].name + "\nResult: " + tool_outputs[i];
+            }
+            
+            ChatMessage tool_result_msg;
+            tool_result_msg.role = "tool";
+            tool_result_msg.content = combined_output;
+            messages.push_back(tool_result_msg);
+            
+            // 记录 token 使用
+            token_tracker.recordTokens(response.input_tokens, response.output_tokens);
+            
+            // 显示本次费用
+            ModelPricing pricing = TokenTracker::getModelPrice(model);
+            double this_cost = (static_cast<double>(response.input_tokens) / 1000000.0) * pricing.input_price_per_1m +
+                              (static_cast<double>(response.output_tokens) / 1000000.0) * pricing.output_price_per_1m;
+            
+            if (this_cost > 0.000001) {
+                std::cout << "   💰 This turn: $" << std::fixed << std::setprecision(6) << this_cost << " USD\n";
+            }
+            
+            // 显示累计统计
+            std::cout << "   📊 Session total: "
+                     << token_tracker.getTotalInputTokens() + token_tracker.getTotalOutputTokens()
+                     << " tokens, $" << std::fixed << std::setprecision(6)
+                     << token_tracker.getTotalCostUSD() << " USD\n\n";
+            
+            // 继续循环，让模型基于工具结果生成下一轮响应
+            continue;
+        }
         
+        // 没有工具调用，正常显示响应
         // 记录 token 使用
         token_tracker.recordTokens(response.input_tokens, response.output_tokens);
         
