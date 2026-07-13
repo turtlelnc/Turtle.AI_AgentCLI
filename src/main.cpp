@@ -366,7 +366,9 @@ int main(int argc, char* argv[]) {
     ui.showWelcome();
     
     // 配置向导
-    int provider_choice = ui.showConfigWizard();
+    std::string selected_model;
+    bool use_previous_api = false;
+    int provider_choice = ui.showConfigWizard(config_mgr, selected_model, use_previous_api);
     
     std::string api_url, api_key, model;
     ProviderType provider;
