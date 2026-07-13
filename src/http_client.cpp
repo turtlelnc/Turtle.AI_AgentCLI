@@ -162,6 +162,22 @@ nlohmann::json HttpClient::buildRequestBody(const std::string& model, const std:
             if (msg.role == "tool" && !msg.tool_call_id.empty()) {
                 message["tool_call_id"] = msg.tool_call_id;
             }
+            // 对于 assistant 消息，如果有 tool_calls，添加该字段
+            if (msg.role == "assistant" && !msg.tool_calls.empty()) {
+                nlohmann::json tool_calls_json = nlohmann::json::array();
+                for (const auto& tc : msg.tool_calls) {
+                    nlohmann::json tool_call_obj = {
+                        {"id", tc.id},
+                        {"type", tc.type.empty() ? "function" : tc.type},
+                        {"function", {
+                            {"name", tc.name},
+                            {"arguments", tc.arguments.is_null() ? tc.input.dump() : tc.arguments.dump()}
+                        }}
+                    };
+                    tool_calls_json.push_back(tool_call_obj);
+                }
+                message["tool_calls"] = tool_calls_json;
+            }
             body["messages"].push_back(message);
         }
         
