@@ -122,7 +122,20 @@ std::string UI::getInput(const std::string& prompt) {
     std::cout << "└─► ";
     
     std::string input;
-    std::getline(std::cin >> std::ws, input);
+    const size_t MAX_INPUT_LENGTH = 4096;
+    
+    // 安全读取输入，防止过长导致崩溃
+    if (!std::getline(std::cin >> std::ws, input)) {
+        return "";
+    }
+    
+    // 检查输入长度，超长时截断并提示
+    if (input.length() > MAX_INPUT_LENGTH) {
+        std::cout << "\n⚠️  Warning: Input truncated from " << input.length() 
+                  << " to " << MAX_INPUT_LENGTH << " characters\n";
+        input = input.substr(0, MAX_INPUT_LENGTH);
+    }
+    
     return input;
 }
 
