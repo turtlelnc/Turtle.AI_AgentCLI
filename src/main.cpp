@@ -10,6 +10,8 @@
 #include <array>
 #include <memory>
 #include <cctype>
+#include <set>
+#include <algorithm>
 
 #include "config_manager.hpp"
 #include "token_tracker.hpp"
@@ -28,18 +30,114 @@ void signalHandler(int /* signum */) {
     std::cout << "\n⚠  Interrupted by user. Type 'exit' to quit.\n";
 }
 
-// 执行终端命令并返回输出
+// Global working directory for path isolation
+static std::string g_work_dir = ".";
+
+// Sanitize and validate command to prevent command injection
+bool isCommandSafe(const std::string& cmd) {
+    // Block dangerous characters that could enable command injection
+    const std::set<char> dangerous_chars = {';', '|', '&', '$', '`', '(', ')', '{', '}', '<', '>', '\\', '\n', '\r'};
+    for (char c : cmd) {
+        if (dangerous_chars.count(c)) {
+            return false;
+        }
+    }
+    
+    // Block dangerous command patterns
+    const std::vector<std::string> dangerous_patterns = {
+        "rm -rf", "sudo", "chmod 777", "dd if=", "> /dev/", 
+        "mkfs", "fdisk", ":(){:|:&};:", "wget http", "curl http",
+        "nc ", "netcat", "bash -c", "sh -c", "eval ", "exec "
+    };
+    
+    for (const auto& pattern : dangerous_patterns) {
+        if (cmd.find(pattern) != std::string::npos) {
+            return false;
+        }
+    }
+    
+    return true;
+}
+
+// Validate and normalize path to ensure it's within the working directory
+bool isPathWithinWorkDir(const std::string& path, const std::string& work_dir) {
+    // Reject paths with traversal attempts
+    if (path.find("..") != std::string::npos) {
+        return false;
+    }
+    
+    // If absolute path, check if it starts with work_dir
+    if (!path.empty() && path[0] == '/') {
+        // Resolve work_dir to absolute path for comparison
+        char* real_work_dir = realpath(work_dir.c_str(), nullptr);
+        if (!real_work_dir) {
+            return false;
+        }
+        std::string abs_work_dir(real_work_dir);
+        free(real_work_dir);
+        
+        char* real_path = realpath(path.c_str(), nullptr);
+        if (!real_path) {
+            // File doesn't exist yet, check parent directory
+            size_t last_slash = path.rfind('/');
+            if (last_slash != std::string::npos) {
+                std::string parent_dir = path.substr(0, last_slash);
+                real_path = realpath(parent_dir.c_str(), nullptr);
+                if (!real_path) {
+                    return false;
+                }
+            } else {
+                return false;
+            }
+        }
+        
+        if (real_path) {
+            std::string abs_path(real_path);
+            free(real_path);
+            return abs_path.find(abs_work_dir) == 0;
+        }
+        return false;
+    }
+    
+    // Relative paths are OK as they will be resolved relative to work_dir
+    return true;
+}
+
+// Normalize path by resolving it relative to working directory
+std::string normalizePath(const std::string& path, const std::string& work_dir) {
+    if (path.empty()) {
+        return work_dir;
+    }
+    
+    if (path[0] == '/') {
+        return path;
+    }
+    
+    // Relative path - prepend work_dir
+    return work_dir + "/" + path;
+}
+
+// Execute terminal command with safety checks
 std::string executeCommand(const std::string& cmd) {
+    // Security check: validate command
+    if (!isCommandSafe(cmd)) {
+        return "Error: Command blocked for security reasons (potential injection or dangerous operation)";
+    }
+    
     std::array<char, 128> buffer;
     std::string result;
-    // 使用 popen 执行命令，重定向 stderr 到 stdout
+    // Use popen to execute command, redirect stderr to stdout
     std::string full_cmd = cmd + " 2>&1";
-    std::unique_ptr<FILE, decltype(&pclose)> pipe(popen(full_cmd.c_str(), "r"), pclose);
+    FILE* pipe = popen(full_cmd.c_str(), "r");
     if (!pipe) {
         return "Error: Failed to execute command";
     }
-    while (fgets(buffer.data(), buffer.size(), pipe.get()) != nullptr) {
+    while (fgets(buffer.data(), buffer.size(), pipe) != nullptr) {
         result += buffer.data();
+    }
+    int status = pclose(pipe);
+    if (WEXITSTATUS(status) != 0 && result.empty()) {
+        return "Error: Command exited with non-zero status";
     }
     return result;
 }
@@ -190,16 +288,16 @@ bool runToolCallParserChecks() {
 
 } // namespace
 
-// 执行单个工具调用并返回结果
+// Execute single tool call with security checks
 std::string executeSingleToolCall(const std::string& tool_name, const std::string& params_raw, const std::string& work_dir) {
-    // 尝试解析为 JSON 首先
+    // Try parsing as JSON first
     nlohmann::json params_json;
     bool is_json = false;
     try {
         params_json = nlohmann::json::parse(params_raw);
         is_json = true;
     } catch (...) {
-        // 不是有效 JSON，使用 XML 解析回退
+        // Not valid JSON, use XML fallback
     }
     
     auto extractParamJson = [&](const std::string& param_name) -> std::string {
@@ -233,10 +331,13 @@ std::string executeSingleToolCall(const std::string& tool_name, const std::strin
             return "Error: Missing 'path' parameter";
         }
         
-        // 如果是相对路径，拼接工作目录
-        if (path[0] != '/') {
-            path = work_dir + "/" + path;
+        // Security check: validate path is within work_dir
+        if (!isPathWithinWorkDir(path, work_dir)) {
+            return "Error: Path traversal detected - access denied";
         }
+        
+        // Normalize path
+        path = normalizePath(path, work_dir);
         
         if (writeFile(path, content)) {
             return "Success: File written to " + path;
@@ -249,9 +350,13 @@ std::string executeSingleToolCall(const std::string& tool_name, const std::strin
         if (path.empty()) {
             return "Error: Missing 'path' parameter";
         }
-        if (path[0] != '/') {
-            path = work_dir + "/" + path;
+        
+        // Security check: validate path is within work_dir
+        if (!isPathWithinWorkDir(path, work_dir)) {
+            return "Error: Path traversal detected - access denied";
         }
+        
+        path = normalizePath(path, work_dir);
         
         std::string content = readFile(path);
         if (!content.empty()) {
@@ -268,9 +373,13 @@ std::string executeSingleToolCall(const std::string& tool_name, const std::strin
         if (path.empty()) {
             return "Error: Missing 'path' parameter";
         }
-        if (path[0] != '/') {
-            path = work_dir + "/" + path;
+        
+        // Security check: validate path is within work_dir
+        if (!isPathWithinWorkDir(path, work_dir)) {
+            return "Error: Path traversal detected - access denied";
         }
+        
+        path = normalizePath(path, work_dir);
         
         std::string content = readFile(path);
         if (!content.empty() && !old_text.empty()) {
@@ -306,9 +415,13 @@ std::string executeSingleToolCall(const std::string& tool_name, const std::strin
     } else if (tool_name == "list_directory") {
         std::string path = extractParam("path");
         if (path.empty()) path = work_dir;
-        if (path[0] != '/') {
-            path = work_dir + "/" + path;
+        
+        // Security check: validate path is within work_dir
+        if (!isPathWithinWorkDir(path, work_dir)) {
+            return "Error: Path traversal detected - access denied";
         }
+        
+        path = normalizePath(path, work_dir);
         
         std::string cmd = "ls -la \"" + path + "\"";
         std::string output = executeCommand(cmd);

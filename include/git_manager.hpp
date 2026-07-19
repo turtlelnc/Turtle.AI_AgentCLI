@@ -21,29 +21,32 @@ class GitManager {
 public:
     GitManager();
     
-    // 检查目录是否为 git 仓库
+    // Check if directory is a git repository
     GitStatus checkStatus(const std::string& path);
     
-    // 获取未提交的文件列表
+    // Get list of uncommitted files
     std::vector<std::string> getUncommittedFiles(const std::string& path);
     
-    // 检查是否落后远程
+    // Check if behind remote
     int checkBehindRemote(const std::string& path);
     
-    // 执行 git pull
+    // Execute git pull (with confirmation for dangerous operations)
     bool pull(const std::string& path);
     
-    // 执行 git stash
+    // Execute git stash
     bool stash(const std::string& path);
     
-    // 执行 git stash pop
+    // Execute git stash pop
     bool stashPop(const std::string& path);
     
-    // 执行 git checkout 撤销改动
+    // Execute git checkout to discard changes (with confirmation)
     bool checkout(const std::string& path);
     
-    // 检查 git 是否可用
+    // Check if git is available
     static bool isGitAvailable();
+    
+    // Request user confirmation for dangerous operations
+    bool confirmDangerousOperation(const std::string& operation);
     
 private:
     std::string executeGitCommand(const std::string& cmd, const std::string& path);
