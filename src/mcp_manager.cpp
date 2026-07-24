@@ -5,6 +5,7 @@
 #include <array>
 #include <chrono>
 #include <future>
+#include <set>
 
 namespace opencode {
 
@@ -240,29 +241,44 @@ nlohmann::json MCPManager::listDir(const nlohmann::json& args) {
     
     return {{"success", true}, {"listing", result}};
 }
-
 nlohmann::json MCPManager::runTerminal(const nlohmann::json& args) {
     if (!args.contains("command")) {
         return {{"success", false}, {"error", "Missing 'command' argument"}};
     }
-    
+
     std::string cmd = args["command"];
-    
-    // 危险命令拦截
-    std::vector<std::string> dangerous = {"rm -rf", "sudo", "chmod 777", "dd if=", "> /dev/", 
-                                          "mkfs", "fdisk", "wget.*\\|\\|.*curl.*\\|\\|", ":(){:|:&};:"};
-    
+
+    // Security check: Block dangerous characters for command injection prevention
+    const std::set<char> dangerous_chars = {';', '|', '&', '$', '`', '(', ')', '{', '}', '<', '>', '\\', '\n', '\r'};
+    for (char c : cmd) {
+        if (dangerous_chars.count(c)) {
+            return {{"success", false}, {"error", "Command blocked: contains dangerous characters"}};
+        }
+    }
+
+    // Danger command interception - expanded list
+    std::vector<std::string> dangerous = {
+        "rm -rf", "sudo", "chmod 777", "dd if=", "> /dev/", 
+        "mkfs", "fdisk", ":(){:|:&};:", "wget http", "curl http",
+        "nc ", "netcat", "bash -c", "sh -c", "eval ", "exec ",
+        "rm -r /", "rm --no-preserve-root", "reboot", "shutdown"
+    };
+
     for (const auto& d : dangerous) {
         if (cmd.find(d) != std::string::npos) {
             return {{"success", false}, {"error", "Dangerous command blocked: " + d}};
         }
     }
-    
-    // 只允许安全子集 - 扩展支持更多开发命令
-    std::vector<std::string> allowed_prefixes = {"ls ", "cat ", "head ", "tail ", "grep ", "find ", 
-                                                  "pwd", "whoami", "date", "echo ", "wc ", "git ", 
-                                                  "npm ", "make ", "cmake ", "g++ ", "./"};
-    
+
+    // Only allow safe subset - extended for more development commands
+    std::vector<std::string> allowed_prefixes = {
+        "ls ", "cat ", "head ", "tail ", "grep ", "find ", 
+        "pwd", "whoami", "date", "echo ", "wc ", "git ", 
+        "npm ", "make ", "cmake ", "g++ ", "./", "node ",
+        "python ", "python3 ", "pip ", "cargo ", "rustc ",
+        "javac ", "java ", "go ", "docker run ", "docker build "
+    };
+
     bool allowed = false;
     for (const auto& prefix : allowed_prefixes) {
         if (cmd.find(prefix) == 0 || cmd == prefix.substr(0, prefix.length()-1)) {
@@ -270,25 +286,25 @@ nlohmann::json MCPManager::runTerminal(const nlohmann::json& args) {
             break;
         }
     }
-    
+
     if (!allowed) {
         return {{"success", false}, {"error", "Command not in allowed safe subset"}};
     }
-    
+
     std::array<char, 256> buffer;
     std::string result;
-    
+
     FILE* pipe = popen(cmd.c_str(), "r");
     if (!pipe) {
         return {{"success", false}, {"error", "Failed to execute command"}};
     }
-    
+
     while (fgets(buffer.data(), buffer.size(), pipe) != nullptr) {
         result += buffer.data();
     }
-    
+
     int status = pclose(pipe);
-    
+
     return {{"success", WEXITSTATUS(status) == 0}, {"output", result}, {"exit_code", WEXITSTATUS(status)}};
 }
 

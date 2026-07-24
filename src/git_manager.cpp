@@ -2,6 +2,7 @@
 #include <cstdlib>
 #include <array>
 #include <sstream>
+#include <iostream>
 
 namespace opencode {
 
@@ -46,21 +47,21 @@ GitStatus GitManager::checkStatus(const std::string& path) {
     status.commits_behind = 0;
     status.commits_ahead = 0;
     
-    // 检查是否为 git 仓库
+    // Check if it's a git repository
     std::string rev_parse = executeGitCommand("git rev-parse --is-inside-work-tree", path);
     if (rev_parse.find("true") == std::string::npos) {
         return status;
     }
     status.is_repo = true;
     
-    // 获取当前分支
+    // Get current branch
     std::string branch = executeGitCommand("git rev-parse --abbrev-ref HEAD", path);
     if (!branch.empty()) {
         branch.erase(branch.find_last_not_of("\n\r") + 1);
         status.current_branch = branch;
     }
     
-    // 检查未提交改动
+    // Check uncommitted changes
     std::string diff = executeGitCommand("git status --porcelain", path);
     if (!diff.empty()) {
         status.has_uncommitted_changes = true;
@@ -73,7 +74,7 @@ GitStatus GitManager::checkStatus(const std::string& path) {
         }
     }
     
-    // 检查远程同步状态
+    // Check remote sync status
     std::string fetch = executeGitCommand("git fetch origin 2>&1", path);
     std::string ahead_behind = executeGitCommand("git rev-list --left-right --count HEAD...origin/" + status.current_branch, path);
     
@@ -120,7 +121,29 @@ int GitManager::checkBehindRemote(const std::string& path) {
     return 0;
 }
 
+// Request user confirmation for dangerous Git operations
+bool GitManager::confirmDangerousOperation(const std::string& operation) {
+    std::cout << "\n⚠️  WARNING: About to execute dangerous Git operation: " << operation << std::endl;
+    std::cout << "   This may result in permanent data loss." << std::endl;
+    std::cout << "   Are you sure? (yes/no): ";
+    
+    std::string response;
+    std::cin >> response;
+    
+    return response == "yes";
+}
+
 bool GitManager::pull(const std::string& path) {
+    // Check for uncommitted changes before pull
+    GitStatus status = checkStatus(path);
+    if (status.has_uncommitted_changes) {
+        std::cout << "\n⚠️  You have uncommitted changes. Pull may cause conflicts." << std::endl;
+        std::cout << "   Recommended: Commit or stash changes first." << std::endl;
+        if (!confirmDangerousOperation("git pull with uncommitted changes")) {
+            return false;
+        }
+    }
+    
     std::string result = executeGitCommand("git pull --rebase", path);
     return (result.find("error") == std::string::npos && result.find("fatal") == std::string::npos);
 }
@@ -136,6 +159,21 @@ bool GitManager::stashPop(const std::string& path) {
 }
 
 bool GitManager::checkout(const std::string& path) {
+    // Checkout is dangerous as it discards local changes
+    GitStatus status = checkStatus(path);
+    if (status.has_uncommitted_changes) {
+        std::cout << "\n⚠️  WARNING: git checkout will discard all uncommitted changes!" << std::endl;
+        std::cout << "   Modified files: ";
+        for (const auto& file : status.modified_files) {
+            std::cout << file << " ";
+        }
+        std::cout << std::endl;
+        
+        if (!confirmDangerousOperation("git checkout (discards changes)")) {
+            return false;
+        }
+    }
+    
     std::string result = executeGitCommand("git checkout .", path);
     return (result.find("error") == std::string::npos && result.find("fatal") == std::string::npos);
 }
