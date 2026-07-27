@@ -1,0 +1,16 @@
+.DS_Store
+.turtle/
+
+build/
+build-*/
+cmake-build-*/
+
+third_party/curl-windows-x64/
+third_party/curl-windows-x64-build/
+
+*.user
+*.swp
+*.tmp
+
+# Local development recovery artifact.
+content.txt

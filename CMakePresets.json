@@ -1,0 +1,54 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 20,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "macos",
+      "displayName": "macOS native",
+      "generator": "Unix Makefiles",
+      "binaryDir": "${sourceDir}/build-macos",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "BUILD_TESTING": "ON"
+      }
+    },
+    {
+      "name": "windows-x64",
+      "displayName": "Windows x64 via llvm-mingw",
+      "generator": "Unix Makefiles",
+      "binaryDir": "${sourceDir}/build-windows-x64",
+      "toolchainFile": "${sourceDir}/cmake/toolchains/llvm-mingw-x86_64.cmake",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "BUILD_TESTING": "OFF",
+        "CMAKE_FIND_PACKAGE_PREFER_CONFIG": "ON",
+        "CURL_DIR": "${sourceDir}/third_party/curl-windows-x64/lib/cmake/CURL"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "macos",
+      "configurePreset": "macos",
+      "jobs": 4
+    },
+    {
+      "name": "windows-x64",
+      "configurePreset": "windows-x64",
+      "jobs": 4
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "macos",
+      "configurePreset": "macos",
+      "output": {
+        "outputOnFailure": true
+      }
+    }
+  ]
+}

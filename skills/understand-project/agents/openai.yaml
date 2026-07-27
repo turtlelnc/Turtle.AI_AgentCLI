@@ -1,0 +1,4 @@
+interface:
+  display_name: "Understand Project"
+  short_description: "Orient in an unfamiliar repository before making changes."
+  default_prompt: "Use -project to map this repository and identify the relevant code paths."

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Git Workflow"
+  short_description: "Inspect repository state and prepare safe Git operations."
+  default_prompt: "Use -workflow to review the working tree and propose the next Git steps."

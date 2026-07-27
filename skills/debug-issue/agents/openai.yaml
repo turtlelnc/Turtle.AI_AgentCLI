@@ -1,0 +1,4 @@
+interface:
+  display_name: "Debug Issue"
+  short_description: "Diagnose reproducible bugs and identify the root cause."
+  default_prompt: "Use -issue to reproduce and diagnose this failure before changing code."

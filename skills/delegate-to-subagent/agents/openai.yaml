@@ -1,0 +1,4 @@
+interface:
+  display_name: "Delegate to Sub-agent"
+  short_description: "Send a focused task to the user-configured sub-agent."
+  default_prompt: "Use $delegate-to-subagent to delegate one focused part of this task."

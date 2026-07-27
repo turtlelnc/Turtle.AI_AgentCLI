@@ -1,0 +1,4 @@
+interface:
+  display_name: "Refactor Safely"
+  short_description: "Plan and execute behavior-preserving code refactors."
+  default_prompt: "Use -safely to improve this code structure while preserving behavior."

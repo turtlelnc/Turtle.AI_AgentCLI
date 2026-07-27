@@ -1,0 +1,4 @@
+interface:
+  display_name: "Verify Changes"
+  short_description: "Build and test changes with evidence-based validation."
+  default_prompt: "Use -changes to validate the current implementation and summarize evidence."
